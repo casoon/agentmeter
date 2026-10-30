@@ -115,6 +115,25 @@ fn text_has_no_color_codes_when_piped() {
 }
 
 #[test]
+fn text_lines_fit_88_columns() {
+    for (claude, codex) in [
+        ("epoch-current", "codex-basic"),
+        ("epoch-baseline", "codex-subagent"),
+        ("epoch-projects", "codex-compacted"),
+    ] {
+        let output = run_both(
+            claude,
+            codex,
+            &["--summary", "--sessions", "--projects", "--probe"],
+        );
+        assert!(output.status.success());
+        for line in String::from_utf8(output.stdout).unwrap().lines() {
+            assert!(line.chars().count() <= 88, "{claude}: {line}");
+        }
+    }
+}
+
+#[test]
 fn bad_flag_exits_two_and_missing_logs_exit_one() {
     assert_eq!(run("epoch-current", &["--nope"]).status.code(), Some(2));
     assert_eq!(run("does-not-exist", &[]).status.code(), Some(1));

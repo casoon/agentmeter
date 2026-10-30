@@ -288,9 +288,10 @@ pub fn run(mut sources: Vec<Source>, now_ms: i64) -> ExitCode {
     // The probe runs once when chosen; its answer then goes into every analysis.
     let mut probe: Option<Probe> = None;
     let mut show: Option<String> = None;
-    let style = Style {
-        color: std::env::var_os("NO_COLOR").is_none_or(|v| v.is_empty()),
-    };
+    let style = Style::new(
+        std::env::var_os("NO_COLOR").is_none_or(|v| v.is_empty()),
+        render::terminal_columns(),
+    );
 
     loop {
         let wanted = choices[choice];
@@ -467,7 +468,7 @@ mod tests {
             source("codex", "Codex CLI", "codex-basic"),
         ]);
         let v = views(&sources, &analyses);
-        let style = Style { color: false };
+        let style = Style::new(false, None);
         let summary = detail("summary", &v, "all logs", style);
         assert!(summary.contains("SUMMARY") && !summary.contains("FINDINGS"));
         let data = detail("data:codex", &v, "all logs", style);

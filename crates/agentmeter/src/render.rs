@@ -16,9 +16,22 @@ const TABLE_ROWS: usize = 20;
 #[derive(Clone, Copy)]
 pub struct Style {
     pub color: bool,
+    /// Columns the text fills, from [`MIN_WIDTH`] to [`WIDTH`].
+    pub width: usize,
 }
 
 impl Style {
+    /// A style for `columns` of terminal, or [`WIDTH`] when there is no terminal.
+    pub fn new(color: bool, columns: Option<usize>) -> Style {
+        Style {
+            color,
+            width: columns.map_or(WIDTH, |c| c.clamp(MIN_WIDTH, WIDTH)),
+        }
+    }
+    /// Cells of a bar: [`BAR`] at full width, fewer in a narrower terminal.
+    fn bar_width(self) -> usize {
+        BAR - (WIDTH - self.width).min(BAR - 8)
+    }
     fn console(self) -> Console {
         Console::new(
             if self.color {
@@ -60,9 +73,30 @@ pub struct Report<'a> {
     pub probe: Option<&'a Probe>,
 }
 
-/// Width the text is wrapped to; bars are [`BAR`] cells wide.
+/// Widest the text gets, also in a wider terminal or a pipe; bars are at most [`BAR`] cells.
 const WIDTH: usize = 88;
+/// Narrower terminals are not followed: the tables need this much.
+const MIN_WIDTH: usize = 80;
 const BAR: usize = 24;
+
+/// The columns of the terminal on stdout, if stdout is one.
+#[cfg(unix)]
+pub fn terminal_columns() -> Option<usize> {
+    // SAFETY: `winsize` is a plain C struct the ioctl fills completely.
+    let size = unsafe {
+        let mut size: libc::winsize = std::mem::zeroed();
+        if libc::ioctl(libc::STDOUT_FILENO, libc::TIOCGWINSZ, &raw mut size) != 0 {
+            return None;
+        }
+        size
+    };
+    (size.ws_col > 0).then_some(usize::from(size.ws_col))
+}
+
+#[cfg(not(unix))]
+pub fn terminal_columns() -> Option<usize> {
+    None
+}
 /// Width of the label column in breakdowns.
 const LABEL: usize = 30;
 
@@ -105,27 +139,37 @@ fn bar(style: Style, tone: Tone, value: u64, max: u64, width: usize) -> String {
     )
 }
 
-/// Words wrapped to [`WIDTH`]: the first line after `first`, the others after `rest`.
-fn wrap(text: &str, first: &str, rest: &str, visible_first: usize) -> String {
+/// Words wrapped to the style's width: the first line after `first`, the others after `rest`.
+/// A word too long for a line of its own, such as a path, is broken after its `/`.
+fn wrap(style: Style, text: &str, first: &str, rest: &str, visible_first: usize) -> String {
     let mut out = String::from(first);
     let mut column = visible_first;
     let indent = rest.chars().count();
     let mut at_start = true;
     for word in text.split_whitespace() {
-        let len = word.chars().count();
-        if !at_start && column + 1 + len > WIDTH {
-            out += "\n";
-            out += rest;
-            column = indent;
-            at_start = true;
+        let pieces: Vec<&str> = if word.chars().count() > style.width - indent {
+            word.split_inclusive('/').collect()
+        } else {
+            vec![word]
+        };
+        for (i, piece) in pieces.into_iter().enumerate() {
+            // Only a word's first piece is set off by a space.
+            let space = usize::from(i == 0);
+            let len = piece.chars().count();
+            if !at_start && column + space + len > style.width {
+                out += "\n";
+                out += rest;
+                column = indent;
+                at_start = true;
+            }
+            if !at_start && space == 1 {
+                out.push(' ');
+                column += 1;
+            }
+            out += piece;
+            column += len;
+            at_start = false;
         }
-        if !at_start {
-            out.push(' ');
-            column += 1;
-        }
-        out += word;
-        column += len;
-        at_start = false;
     }
     out += "\n";
     out
@@ -190,7 +234,7 @@ fn summary_text(s: &Summary, style: Style) -> String {
             Tone::Success,
             s.cache_read_pct.round() as u64,
             100,
-            BAR
+            style.bar_width()
         ),
         style.dim("share read from cache")
     );
@@ -199,23 +243,30 @@ fn summary_text(s: &Summary, style: Style) -> String {
     if c.total == 0 {
         out += "  Compactions   none\n";
     } else {
-        out += &format!(
-            "  Compactions   {} (auto {}, manual {}, trigger unknown {}) · before: avg {}, min {}, max {}\n",
-            count(c.total),
-            count(c.auto),
-            count(c.manual),
-            count(c.trigger_unknown),
-            tokens(c.avg_tokens_before),
-            tokens(c.min_tokens_before),
-            tokens(c.max_tokens_before)
+        out += &wrap(
+            style,
+            &format!(
+                "{} (auto {}, manual {}, trigger unknown {}) · before: avg {}, min {}, max {}",
+                count(c.total),
+                count(c.auto),
+                count(c.manual),
+                count(c.trigger_unknown),
+                tokens(c.avg_tokens_before),
+                tokens(c.min_tokens_before),
+                tokens(c.max_tokens_before)
+            ),
+            "  Compactions   ",
+            "                ",
+            16,
         );
     }
     if !s.days.is_empty() {
         let max = s.days.iter().map(|d| d.input).max().unwrap_or(0);
         out += &heading(style, "DAYS (UTC)");
         out += &style.dim(&format!(
-            "  Day          Requests     Input  {:<BAR$}  Cache  Compactions",
-            "Input"
+            "  Day          Requests     Input  {:<w$}  Cache  Compactions",
+            "Input",
+            w = style.bar_width()
         ));
         out += "\n";
         for d in &s.days {
@@ -224,7 +275,7 @@ fn summary_text(s: &Summary, style: Style) -> String {
                 d.date,
                 count(d.requests),
                 tokens(d.input),
-                bar(style, Tone::Info, d.input, max, BAR),
+                bar(style, Tone::Info, d.input, max, style.bar_width()),
                 pct(d.cache_read_pct),
                 d.compactions
             );
@@ -243,7 +294,7 @@ fn summary_text(s: &Summary, style: Style) -> String {
                 "  {:<28} {:>8}  {}\n",
                 clip(name, 28),
                 count(m.requests),
-                bar(style, Tone::Info, m.requests, max, BAR)
+                bar(style, Tone::Info, m.requests, max, style.bar_width())
             );
         }
     }
@@ -287,7 +338,7 @@ fn parts_text(parts: &[Part], tone: Tone, style: Style) -> String {
         out += &format!(
             "    {:<LABEL$} {} {:>7}{}\n",
             clip(&p.label, LABEL),
-            bar(style, tone, p.value, max, BAR),
+            bar(style, tone, p.value, max, style.bar_width()),
             value_text(p.value, p.unit),
             style.dim(&counted)
         );
@@ -307,7 +358,7 @@ fn spread_text(f: &Finding, style: Style) -> String {
         return String::new();
     };
     let median = f.measure.value as u64;
-    let width = BAR + 8;
+    let width = style.bar_width() + 8;
     let at = |v: u64| ((v as f64 / max.max(1) as f64) * (width - 1) as f64).round() as usize;
     let mut cells = vec![' '; width];
     for (i, cell) in cells.iter_mut().enumerate() {
@@ -347,9 +398,10 @@ fn stacked_text(parts: &[Part], style: Style) -> String {
     let mut used = 0;
     for (i, p) in parts.iter().enumerate().take(3) {
         let cells = if i == parts.len().min(3) - 1 {
-            (BAR + 8).saturating_sub(used)
+            (style.bar_width() + 8).saturating_sub(used)
         } else {
-            ((p.value as f64 / total.max(1) as f64) * (BAR + 8) as f64).round() as usize
+            ((p.value as f64 / total.max(1) as f64) * (style.bar_width() + 8) as f64).round()
+                as usize
         };
         used += cells;
         line += &style.tone(tones[i], &glyphs[i].repeat(cells));
@@ -366,8 +418,33 @@ fn stacked_text(parts: &[Part], style: Style) -> String {
             style.tone(tones[i], glyphs[i]),
             p.label,
             tokens(p.value),
-            w = LABEL - 3 + BAR + 8
+            w = LABEL - 3 + style.bar_width() + 8
         );
+    }
+    out
+}
+
+/// An evidence line: file and event, broken before ` · ` and after `/` where the line would
+/// be too wide, the rest under the first.
+fn evidence_text(style: Style, file: &str, event: &str) -> String {
+    const INDENT: &str = "              ";
+    let room = style.width - INDENT.len();
+    let mut pieces: Vec<String> = file.split_inclusive('/').map(str::to_owned).collect();
+    pieces.push(format!(" · {event}"));
+    let mut lines: Vec<String> = vec![String::new()];
+    for piece in pieces {
+        let line = lines.last_mut().expect("lines starts with one");
+        if line.is_empty() || line.chars().count() + piece.chars().count() <= room {
+            *line += &piece;
+        } else {
+            lines.push(piece.trim_start().to_owned());
+        }
+    }
+    let mut out = String::new();
+    for (i, line) in lines.iter().enumerate() {
+        out += if i == 0 { "    evidence  " } else { INDENT };
+        out += line;
+        out += "\n";
     }
     out
 }
@@ -390,7 +467,7 @@ fn probe_text(probe: &Probe, style: Style) -> String {
             out += &format!(
                 "    {:<LABEL$} {} {:>7}\n",
                 clip(&item.label, LABEL),
-                bar(style, Tone::Warning, item.tokens, max, BAR),
+                bar(style, Tone::Warning, item.tokens, max, style.bar_width()),
                 tokens(item.tokens)
             );
         }
@@ -404,6 +481,7 @@ fn probe_text(probe: &Probe, style: Style) -> String {
         };
         if !base.deferred.is_empty() {
             out += &wrap(
+                style,
                 &style.dim(&format!(
                     "loaded on demand, not sent at start: {}",
                     list(&base.deferred, 5)
@@ -415,6 +493,7 @@ fn probe_text(probe: &Probe, style: Style) -> String {
         }
         if !base.mcp_servers.is_empty() {
             out += &wrap(
+                style,
                 &format!("MCP servers: {}", list(&base.mcp_servers, 6)),
                 "    ",
                 "      ",
@@ -423,6 +502,7 @@ fn probe_text(probe: &Probe, style: Style) -> String {
         }
         if !base.memory_files.is_empty() {
             out += &wrap(
+                style,
                 &format!("memory files: {}", list(&base.memory_files, 6)),
                 "    ",
                 "      ",
@@ -441,6 +521,7 @@ fn probe_text(probe: &Probe, style: Style) -> String {
             .collect();
         if !projects.is_empty() {
             out += &wrap(
+                style,
                 &format!("in the project directory: {}", projects.join(" · ")),
                 "    ",
                 "      ",
@@ -499,7 +580,7 @@ fn findings_text(evaluation: &Evaluation, probe: Option<&Probe>, style: Style) -
     .collect::<Vec<_>>()
     .join("   ");
     out += &format!("\n{}   {headline}\n", style.tone(Tone::Title, "FINDINGS"));
-    out += &style.dim(&format!("{}\n", "─".repeat(WIDTH)));
+    out += &style.dim(&format!("{}\n", "─".repeat(style.width)));
     match evaluation.verdict {
         "no_data" => {
             out += "  No analysis possible: no requests with usage in the selected period.\n"
@@ -520,14 +601,16 @@ fn findings_text(evaluation: &Evaluation, probe: Option<&Probe>, style: Style) -
             f.certainty,
             f.rule_version
         );
-        let pad = WIDTH.saturating_sub(title.chars().count() + tags.chars().count() + 2);
+        let pad = style
+            .width
+            .saturating_sub(title.chars().count() + tags.chars().count() + 2);
         out += &format!(
             "\n{}{}{}\n",
             style.tone(tone, &title),
             " ".repeat(pad + 2),
             style.dim(&tags)
         );
-        out += &wrap(&style.bold(&f.conclusion.text), "  ⇒ ", "    ", 4);
+        out += &wrap(style, &style.bold(&f.conclusion.text), "  ⇒ ", "    ", 4);
         out += "\n";
         if f.rule == "baseline-load" {
             out += &spread_text(f, style);
@@ -562,9 +645,10 @@ fn findings_text(evaluation: &Evaluation, probe: Option<&Probe>, style: Style) -
             }
         }
         out += "\n";
-        out += &wrap(&f.message, "    measured  ", "              ", 14);
+        out += &wrap(style, &f.message, "    measured  ", "              ", 14);
         let m = &f.measure;
         out += &wrap(
+            style,
             &style.dim(&format!(
                 "{} = {} {} of {} {} (sample {} {})",
                 m.name,
@@ -580,10 +664,11 @@ fn findings_text(evaluation: &Evaluation, probe: Option<&Probe>, style: Style) -
             14,
         );
         for e in &f.evidence {
-            out += &style.dim(&format!("    evidence  {} · {}\n", e.file, e.event));
+            out += &style.dim(&evidence_text(style, &e.file, &e.event));
         }
         for c in &f.counterexamples {
             out += &wrap(
+                style,
                 &style.dim(c),
                 &style.dim("    but       "),
                 "              ",
@@ -591,6 +676,7 @@ fn findings_text(evaluation: &Evaluation, probe: Option<&Probe>, style: Style) -
             );
         }
         out += &wrap(
+            style,
             &f.next_step,
             &format!("    {}      ", style.bold("next")),
             "              ",
@@ -619,6 +705,7 @@ fn findings_text(evaluation: &Evaluation, probe: Option<&Probe>, style: Style) -
         };
         let first = format!("{} {:<16}", style.tone(tone, mark), r.rule);
         out += &wrap(
+            style,
             &style.dim(&format!("{line} (v{})", r.rule_version)),
             &first,
             "                  ",
@@ -648,26 +735,38 @@ fn sessions_text(rows: &[SessionRow], style: Style) -> String {
         ),
     );
     let max = rows.iter().map(|r| r.input).max().unwrap_or(0);
+    // The columns without the bar take 78; the bar gets what is left, or goes.
+    let bar_cells = table_bar(style, 78);
     out += &style.dim(&format!(
-        "  Session   Project            Requests   Span     Peak   Input  {:<16}  Cache  Compact.",
-        ""
+        "  Session   Project        Requests   Span     Peak   Input  {}Cache  Compact",
+        bar_cells.map_or(String::new(), |w| format!("{:<w$}  ", ""))
     ));
     out += "\n";
     for r in rows.iter().take(TABLE_ROWS) {
         out += &format!(
-            "  {:<8}  {:<18} {:>8}  {:>5.1} h  {:>6}  {:>6}  {}  {:>5}  {:>6}\n",
+            "  {:<8}  {:<14} {:>8}  {:>5.1} h  {:>6}  {:>6}  {}{:>5}  {:>7}\n",
             clip(&r.session, 8),
-            clip(&r.project, 18),
+            clip(&r.project, 14),
             count(r.requests),
             r.hours,
             tokens(r.peak_context),
             tokens(r.input),
-            bar(style, Tone::Info, r.input, max, 16),
+            bar_cells.map_or(String::new(), |w| format!(
+                "{}  ",
+                bar(style, Tone::Info, r.input, max, w)
+            )),
             pct(r.cache_read_pct),
             r.compactions
         );
     }
     out
+}
+
+/// Cells for a table's bar column next to `columns` of other columns: at most [`BAR`], none
+/// if fewer than 6 fit.
+fn table_bar(style: Style, columns: usize) -> Option<usize> {
+    let cells = style.width.saturating_sub(columns).min(BAR);
+    (cells >= 6).then_some(cells)
 }
 
 fn projects_text(rows: &[ProjectRow], style: Style) -> String {
@@ -679,26 +778,30 @@ fn projects_text(rows: &[ProjectRow], style: Style) -> String {
             count(rows.len() as u64)
         ),
     );
+    let bar_cells = table_bar(style, 69);
     out += &style.dim(&format!(
-        "  Project                  Sessions  Requests   Input  Share  {:<BAR$}  Cache",
-        ""
+        "  Project                  Sessions  Requests   Input  Share  {}Cache",
+        bar_cells.map_or(String::new(), |w| format!("{:<w$}  ", ""))
     ));
     out += "\n";
     for r in rows.iter().take(TABLE_ROWS) {
         out += &format!(
-            "  {:<24} {:>8}  {:>8}  {:>6}  {:>5}  {}  {:>5}\n",
+            "  {:<24} {:>8}  {:>8}  {:>6}  {:>5}  {}{:>5}\n",
             clip(&r.project, 24),
             count(r.sessions),
             count(r.requests),
             tokens(r.input),
             pct(r.input_share_pct),
-            bar(
-                style,
-                Tone::Info,
-                (r.input_share_pct * 10.0).round() as u64,
-                1000,
-                BAR
-            ),
+            bar_cells.map_or(String::new(), |w| format!(
+                "{}  ",
+                bar(
+                    style,
+                    Tone::Info,
+                    (r.input_share_pct * 10.0).round() as u64,
+                    1000,
+                    w
+                )
+            )),
             pct(r.cache_read_pct)
         );
     }
@@ -714,7 +817,13 @@ fn read_text(report: &Report, style: Style) -> String {
     let bad = style.tone(Tone::Error, "✗");
     let mut out = heading(style, "READ");
     let line = |mark: &str, what: &str, text: String| {
-        wrap(&text, &format!("  {mark} {what:<9} "), "              ", 14)
+        wrap(
+            style,
+            &text,
+            &format!("  {mark} {what:<9} "),
+            "              ",
+            14,
+        )
     };
     let places: Vec<String> = report
         .places
@@ -974,4 +1083,48 @@ fn json_source(report: &Report) -> Value {
         put("rules", json!(v.rules));
     }
     root
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const FILE: &str =
+        "-Users-me-GitHub-ai-agent-config/76c6c7ec-4dbe-4027-b596-a6e9912d95e2.jsonl";
+
+    #[test]
+    fn evidence_breaks_after_a_slash_and_before_the_event() {
+        let style = Style::new(false, None);
+        assert_eq!(
+            evidence_text(style, FILE, "msg_01S8BuvoxgQfkPcmJczZ5xH1"),
+            "    evidence  -Users-me-GitHub-ai-agent-config/\n\
+             \x20             76c6c7ec-4dbe-4027-b596-a6e9912d95e2.jsonl · msg_01S8BuvoxgQfkPcmJczZ5xH1\n"
+        );
+        assert_eq!(
+            evidence_text(style, "a/b.jsonl", "line:3"),
+            "    evidence  a/b.jsonl · line:3\n"
+        );
+    }
+
+    #[test]
+    fn a_narrow_terminal_shrinks_lines_and_a_wide_one_stays_at_88() {
+        assert_eq!(Style::new(false, Some(200)).width, WIDTH);
+        assert_eq!(Style::new(false, Some(40)).width, MIN_WIDTH);
+        for columns in [80, 84, 88] {
+            let style = Style::new(false, Some(columns));
+            let text = evidence_text(style, FILE, "msg_01S8BuvoxgQfkPcmJczZ5xH1")
+                + &wrap(style, &"word ".repeat(40), "  ", "  ", 2)
+                + &wrap(
+                    style,
+                    &format!("from /{}", "directory/".repeat(12)),
+                    "  ",
+                    "    ",
+                    2,
+                )
+                + &bar(style, Tone::Info, 1, 2, style.bar_width());
+            for line in text.lines() {
+                assert!(line.chars().count() <= columns, "{columns}: {line}");
+            }
+        }
+    }
 }

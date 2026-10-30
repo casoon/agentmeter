@@ -9,6 +9,7 @@ dependencies = [
  "agentmeter-claude",
  "agentmeter-codex",
  "agentmeter-core",
+ "libc",
  "runemark",
  "serde",
  "serde_json",

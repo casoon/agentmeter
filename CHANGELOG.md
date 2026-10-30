@@ -7,6 +7,10 @@ behaviour.
 
 ## [Unreleased]
 
+### Fixed
+
+- **CLI:** text output stays within the terminal width, at most 88 columns: evidence lines and long paths break after `/` and before ` · ` with an indent, and the sessions and projects tables shrink their bars instead of spilling over ([#2](https://github.com/casoon/agentmeter/issues/2)).
+
 ## [0.1.0] - 2026-10-30
 
 ### Added

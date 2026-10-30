@@ -268,9 +268,9 @@ fn run(options: &Options, interactive: bool) -> ExitCode {
     if options.json {
         println!("{}", render::json(&reports));
     } else {
-        let color = std::io::stdout().is_terminal()
-            && std::env::var_os("NO_COLOR").is_none_or(|v| v.is_empty());
-        let style = Style { color };
+        let terminal = std::io::stdout().is_terminal();
+        let color = terminal && std::env::var_os("NO_COLOR").is_none_or(|v| v.is_empty());
+        let style = Style::new(color, render::terminal_columns().filter(|_| terminal));
         let blocks: Vec<String> = reports.iter().map(|r| render::text(r, style)).collect();
         print!("{}", blocks.join("\n"));
     }

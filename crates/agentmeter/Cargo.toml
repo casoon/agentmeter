@@ -18,3 +18,7 @@ agentmeter-codex.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 runemark.workspace = true
+
+# The terminal width, read with TIOCGWINSZ; already in the tree through runemark.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
