@@ -1,0 +1,169 @@
+name: Release
+
+# A version tag verifies the workspace, builds the release binaries, publishes the four crates
+# to crates.io and creates the GitHub release.
+#
+# Publishing uses crates.io trusted publishing: the job exchanges a GitHub OIDC token for a
+# short-lived crates.io token, so no registry token is stored anywhere. It runs in the
+# `crates-io` environment, whose required reviewer has to approve it, and it waits for the
+# binaries, because a publish cannot be undone. Trusted publishing can only be set up for a
+# crate that exists, so a version that is already on crates.io (the first one, published by
+# hand) is skipped instead of failing the release.
+#
+# Every archive carries a signed build provenance attestation (Sigstore, via
+# actions/attest-build-provenance), next to its .sha256 and a combined SHA256SUMS. The binaries
+# are built with cargo auditable, which embeds the dependency list so that `cargo audit bin` can
+# check a downloaded one.
+#
+# workflow_dispatch runs the verification and the builds without releasing, as a dry run before
+# tagging.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  verify:
+    name: Verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace --locked
+      - name: Verify packages
+        run: cargo package --workspace --locked
+      - name: Tag matches crate version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          crate_version="$(cargo metadata --format-version 1 --no-deps \
+            | python3 -c 'import json,sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] == "agentmeter"))')"
+          tag_version="${GITHUB_REF_NAME#v}"
+          echo "crate=$crate_version tag=$tag_version"
+          test "$crate_version" = "$tag_version"
+
+  binaries:
+    name: Binary (${{ matrix.target }})
+    needs: verify
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          - target: x86_64-apple-darwin
+            os: macos-latest
+          # Linux is built against musl so one binary runs everywhere rather than against the
+          # glibc of whatever runner built it.
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: Install musl tooling
+        if: endsWith(matrix.target, '-musl')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+      - name: Install cargo-auditable
+        run: cargo install cargo-auditable --version 0.7.7 --locked
+      - run: cargo auditable build --release --locked -p agentmeter --target ${{ matrix.target }}
+      - name: Archive
+        run: |
+          version="$(cargo metadata --format-version 1 --no-deps \
+            | python3 -c 'import json,sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] == "agentmeter"))')"
+          name="agentmeter-${version}-${{ matrix.target }}"
+          mkdir -p "dist/${name}"
+          cp "target/${{ matrix.target }}/release/agentmeter" "dist/${name}/agentmeter"
+          cp README.md LICENSE CHANGELOG.md "dist/${name}/"
+          tar -czf "dist/${name}.tar.gz" -C dist "${name}"
+          rm -rf "dist/${name}"
+          cd dist
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "${name}.tar.gz" > "${name}.tar.gz.sha256"
+          else
+            shasum -a 256 "${name}.tar.gz" > "${name}.tar.gz.sha256"
+          fi
+      - name: Attest build provenance
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-path: dist/*.tar.gz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    name: Publish to crates.io
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [verify, binaries]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: crates-io
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Already published?
+        id: published
+        run: |
+          status="$(curl -s -o /dev/null -w '%{http_code}' \
+            -A 'agentmeter release workflow (github.com/casoon/agentmeter)' \
+            "https://crates.io/api/v1/crates/agentmeter/${GITHUB_REF_NAME#v}")"
+          echo "crates.io answered $status for agentmeter ${GITHUB_REF_NAME#v}"
+          echo "skip=$([ "$status" = 200 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+      - uses: rust-lang/crates-io-auth-action@v1
+        if: steps.published.outputs.skip != 'true'
+        id: auth
+      # Publishes the crates in dependency order: core, the adapters, then the binary.
+      - run: cargo publish --workspace --locked
+        if: steps.published.outputs.skip != 'true'
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+
+  release:
+    name: GitHub Release
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [verify, binaries, publish]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Combined checksums
+        working-directory: dist
+        run: cat ./*.tar.gz.sha256 > SHA256SUMS
+      - uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: dist/*
