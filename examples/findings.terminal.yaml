@@ -11,6 +11,7 @@ terminal:
 steps:
   - wait: 500
   - run: agentmeter --tool claude --findings
+  - wait: 600
   - output:
       raw: "\e[1magentmeter\e[0m · Claude Code · all logs
 
@@ -53,4 +54,4 @@ steps:
 
         \e[2m  unknown usage fields: new_counter (1)\e[0m\n"
     delay: 0
-  - wait: 4000
+  - wait: 11000
