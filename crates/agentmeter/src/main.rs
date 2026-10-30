@@ -152,11 +152,11 @@ fn run(options: &Options, interactive: bool) -> ExitCode {
         .iter_mut()
         .map(|s| analyse(s, options, now_ms))
         .collect();
-    if let Some(name) = &options.project {
-        if sources.iter().all(|s| s.dataset.requests.is_empty()) {
-            eprintln!("agentmeter: no project matches `{name}`");
-            return ExitCode::FAILURE;
-        }
+    if let Some(name) = &options.project
+        && sources.iter().all(|s| s.dataset.requests.is_empty())
+    {
+        eprintln!("agentmeter: no project matches `{name}`");
+        return ExitCode::FAILURE;
     }
     if let Some(Check::DataQuality) = options.check {
         return run_check(&sources, &analyses, options.json);
