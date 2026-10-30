@@ -19,3 +19,10 @@ behaviour.
 - **CLI:** `agentmeter` without arguments on a terminal opens a menu (summary, sessions, projects, one row per rule with its status, data quality per source) with the source and the period selectable; in a pipe or with any flag it prints the text as before.
 - **CLI:** `--check data-quality` exits 1 when a source has unreadable lines or compressed files over a limit or no usage in the period, 0 otherwise and 2 for a bad call. Notices and info never fail it.
 - **JSON:** the output carries `schema_version` (1) and is documented field by field in [JSON output](https://casoon.github.io/agentmeter/docs/reference/json/).
+
+### Fixed
+
+- **CLI:** `--since` with a day count too large to compute is refused as a bad call instead of overflowing.
+- **CLI:** `--project` that matches no project in any source exits 1 with a message instead of printing an empty summary.
+- **CLI:** requests without a model name appear as `(unknown)` in the model table instead of a blank row.
+- **Findings:** the `baseline-load` next step names `/context` as a Claude Code command instead of suggesting it for every source.

@@ -64,7 +64,12 @@ pub enum Invocation {
 
 fn parse_since(value: &str) -> Option<Since> {
     if let Some(days) = value.strip_suffix('d') {
-        return days.parse().ok().filter(|d| *d > 0).map(Since::Days);
+        // A day count whose milliseconds do not fit is no period either.
+        return days
+            .parse::<i64>()
+            .ok()
+            .filter(|d| *d > 0 && d.checked_mul(DAY_MS).is_some())
+            .map(Since::Days);
     }
     parse_date_ms(value).map(Since::Date)
 }
@@ -187,6 +192,10 @@ mod tests {
     fn bad_input_is_an_error() {
         assert!(matches!(run(&["--since", "soon"]), Invocation::Error(_)));
         assert!(matches!(run(&["--since"]), Invocation::Error(_)));
+        assert!(matches!(
+            run(&["--since", "99999999999999999d"]),
+            Invocation::Error(_)
+        ));
         assert!(matches!(run(&["--nope"]), Invocation::Error(_)));
         assert_eq!(run(&["-V"]), Invocation::Version);
     }
