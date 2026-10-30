@@ -7,6 +7,12 @@ usage, each with the evidence behind it, how sure it is and one concrete thing t
 > **Status:** early development, no versioned release yet. Output, JSON shape and rule
 > definitions may change.
 
+<p align="center">
+  <img src=".github/readme/demo.svg" alt="Terminal recording of agentmeter --tool claude --findings: one cache-rebuild finding with its measure, evidence, counter-arguments and next step, then the rules that found nothing, and the data quality. The logs are small synthetic sample data, not real usage." width="900">
+</p>
+
+<p align="center"><sub>Recorded output of <code>agentmeter --findings</code> on synthetic sample logs from <code>tests/fixtures</code>.</sub></p>
+
 ## Install
 
 ```sh

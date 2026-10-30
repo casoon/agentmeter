@@ -1,0 +1,56 @@
+# Recorded with `castwright build --allow-exec --record` from `agentmeter --findings`, run in a
+# folder holding sample-logs/, a copy of tests/fixtures/epoch-current (synthetic Claude Code logs).
+version: 1
+
+terminal:
+  title: agentmeter
+  cols: 110
+  rows: 32
+  theme: catppuccin-mocha
+
+steps:
+  - wait: 500
+  - run: agentmeter --tool claude --findings
+  - output:
+      raw: "\e[1magentmeter\e[0m · Claude Code · all logs
+
+
+        \e[1mFINDINGS\e[0m
+
+        \  \e[36mi\e[0m \e[1mcache-rebuild v1\e[0m \e[2minfo · observed\e[0m
+
+        \    1 of 1 pauses over 5 min were followed by a cache write of 100k+ (120k tokens); of these 1 expected (model change or compaction), 0 gap over 1 h, 0 5 min cache likely expired, 0 cause unknown
+
+        \e[2m    measure: pauses over 5 min followed by a cache write of 100k+ = 1 rebuilds of 1 pauses over 5 min (sample 2 log files)
+
+        \e[0m\e[2m    evidence: demo-app/sess-main.jsonl · msg_M3
+
+        \e[0m\e[2m    but: a pause is part of the work; the rebuild after it is expected, not avoidable by itself
+
+        \e[0m\e[2m    but: an edited memory file, a changed tool list or a split cache prefix also rewrites the cache
+
+        \e[0m\e[2m    but: the cache lifetime of the earlier writes is only known if the file shows them
+
+        \e[0m    \e[1mnext:\e[0m check in the evidence files whether the pause matches your work; if 5 min pauses dominate, the 1 h cache (promptCacheTtl) may reduce rewrites, but its writes cost more, so compare before switching
+
+        \e[2m  baseline-load v1 not measurable: only 1 clean session starts (5 needed); 0 resumed or forked, 0 without log start
+
+        \e[0m\e[2m  compact-thrash v1 checked, nothing to report: no automatic compaction pair in the period
+
+        \e[0m\e[2m  big-context v2 checked, nothing to report: 0 of 4 requests above 500k (0.0 % of tokens, below 10 %); largest context 120k
+
+        \e[0m\e[2m  long-session v1 checked, nothing to report: 0 of 1 sessions span more than 24 h (longest 0.5 h)
+
+        \e[0m\e[2m
+
+        Data: observed 2026-10-28T12:00:05Z – 2026-10-28T12:30:00Z
+
+        \  Read 2 files, 10 lines, 4 requests · version 2.1.309
+
+        \e[0m\e[2m  0 duplicate lines merged, 1 sub-agent replays dropped\e[0m
+
+        \e[2m  unknown entry types: future-event (1)\e[0m
+
+        \e[2m  unknown usage fields: new_counter (1)\e[0m\n"
+    delay: 0
+  - wait: 4000
