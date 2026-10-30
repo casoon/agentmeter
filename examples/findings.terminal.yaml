@@ -1,5 +1,6 @@
 # Recorded with `castwright build --allow-exec --record` from `agentmeter --tool claude --findings`
 # with CLAUDE_CONFIG_DIR pointing at sample-logs/, a copy of tests/fixtures/epoch-current (synthetic logs).
+# SVG export: `castwright build findings.terminal.yaml --format svg --loop-delay 11000` (final frame held 11 s).
 version: 1
 
 terminal:
