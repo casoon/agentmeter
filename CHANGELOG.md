@@ -22,6 +22,7 @@ behaviour.
 
 ### Fixed
 
+- **Build:** the declared minimum Rust version is 1.88, the version the code and `ruzstd` need; 1.85 did not build.
 - **CLI:** `--since` with a day count too large to compute is refused as a bad call instead of overflowing.
 - **CLI:** `--project` that matches no project in any source exits 1 with a message instead of printing an empty summary.
 - **CLI:** requests without a model name appear as `(unknown)` in the model table instead of a blank row.
