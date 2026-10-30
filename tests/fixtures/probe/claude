@@ -1,0 +1,4 @@
+#!/bin/sh
+# Stand-in for `claude -p /context ... --output-format json` in the CLI tests: prints a recorded
+# answer (shortened) and ignores its arguments.
+cat "$(dirname "$0")/context.json"

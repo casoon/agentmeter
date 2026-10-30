@@ -108,7 +108,64 @@ pub struct SessionStart {
     /// Why not: `inherited-history` (lines of another session: resume or fork) or
     /// `no-log-start` (the first message has a parent that is not in the file).
     pub reason: Option<&'static str>,
+    /// The front end that wrote the session as the log names it (`claude-desktop`, `cli`,
+    /// `Codex Desktop`, ...); `None` when not recorded.
+    pub entrypoint: Option<String>,
+    /// Working directory at the start of the session; used only to run a probe there.
+    pub cwd: Option<String>,
 }
+
+/// What the agent itself reports it would send at the start of a session in one directory
+/// (Claude Code `/context`). Estimates by the agent, not counted from a log.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ContextProbe {
+    /// `empty directory` for the configuration alone, else the project name.
+    pub place: String,
+    pub dir: String,
+    pub model: Option<String>,
+    /// Tokens sent at session start: the sum of `sent`.
+    pub total: u64,
+    /// Categories sent with every request (system prompt, tools, memory files, skills, ...).
+    pub sent: Vec<ProbeItem>,
+    /// Categories listed by name only and loaded on demand; not in `total`.
+    pub deferred: Vec<ProbeItem>,
+    /// Memory files (CLAUDE.md and the like) with their paths.
+    pub memory_files: Vec<ProbeItem>,
+    /// MCP tool tokens summed per server.
+    pub mcp_servers: Vec<ProbeItem>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ProbeItem {
+    pub label: String,
+    pub tokens: u64,
+}
+
+/// The result of running the probes: what ran, and what could not.
+#[derive(Debug, Default, Clone, Serialize)]
+pub struct Probe {
+    /// The command run, for the report.
+    pub command: String,
+    pub runs: Vec<ContextProbe>,
+    /// Place and reason of each probe that failed.
+    pub failures: Vec<ProbeFailure>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ProbeFailure {
+    pub place: String,
+    pub reason: String,
+}
+
+impl Probe {
+    /// The run in an empty directory: the configuration without any project.
+    pub fn baseline(&self) -> Option<&ContextProbe> {
+        self.runs.iter().find(|r| r.place == PROBE_EMPTY_PLACE)
+    }
+}
+
+/// [`ContextProbe::place`] of the run in an empty directory.
+pub const PROBE_EMPTY_PLACE: &str = "empty directory";
 
 /// Everything one adapter read.
 #[derive(Debug, Default, Clone)]

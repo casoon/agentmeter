@@ -17,6 +17,8 @@ fn run_both(claude: &str, codex: &str, args: &[&str]) -> Output {
         .args(args)
         .env("CLAUDE_CONFIG_DIR", fixtures().join(claude))
         .env("CODEX_HOME", fixtures().join(codex))
+        // `--probe` never starts the real claude in a test.
+        .env("AGENTMETER_CLAUDE", fixtures().join("probe/claude"))
         .env_remove("NO_COLOR")
         .output()
         .unwrap()
@@ -258,13 +260,14 @@ fn documented_json_fields_equal_the_real_ones() {
             "--sessions",
             "--projects",
             "--findings",
+            "--probe",
         ],
     );
     let v: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(v["schema_version"], 1);
     let documented = documented_fields();
     assert!(
-        documented.len() == 13,
+        documented.len() == 18,
         "the doc lists the objects: {documented:?}"
     );
     for (path, fields) in &documented {
@@ -349,4 +352,54 @@ fn without_a_terminal_no_arguments_print_the_text_summary_not_the_menu() {
     assert!(output.status.success());
     let text = String::from_utf8(output.stdout).unwrap();
     assert!(text.contains("SUMMARY") && !text.contains('\x1b'));
+}
+
+#[test]
+fn probe_splits_the_session_start_with_what_claude_reports() {
+    let v = json("epoch-baseline", &["--json", "--probe"]);
+    let probe = &v["probe"];
+    assert_eq!(probe["runs"][0]["place"], "empty directory");
+    // 3k + 19.1k + 1.4k + 9.9k; deferred tools and free space are not sent.
+    assert_eq!(probe["runs"][0]["total"], 33_400);
+    assert_eq!(probe["failures"].as_array().unwrap().len(), 0);
+    let baseline = &v["findings"][0];
+    assert_eq!(baseline["rule"], "baseline-load");
+    assert_eq!(baseline["parts"][0]["value"], 33_400);
+    let text = baseline["conclusion"]["text"].as_str().unwrap();
+    // The front end the log names is not what /context in the CLI sees.
+    assert!(text.contains("claude-desktop"), "{text}");
+}
+
+#[test]
+fn a_probe_that_cannot_run_is_reported_not_fatal() {
+    let output = Command::new(env!("CARGO_BIN_EXE_agentmeter"))
+        .args(["--probe", "--json"])
+        .env("CLAUDE_CONFIG_DIR", fixtures().join("epoch-baseline"))
+        .env("CODEX_HOME", fixtures().join("does-not-exist"))
+        .env("AGENTMETER_CLAUDE", fixtures().join("no-such-program"))
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let v: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let source = &v["sources"][0];
+    assert_eq!(source["probe"]["runs"].as_array().unwrap().len(), 0);
+    assert!(
+        source["probe"]["failures"][0]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("not found")
+    );
+    // Without an answer the start is not split, and the conclusion says so.
+    assert_eq!(source["findings"][0]["conclusion"]["kind"], "look");
+}
+
+#[test]
+fn findings_text_shows_conclusions_bars_and_what_was_read() {
+    let output = run("epoch-baseline", &["--probe"]);
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(!text.contains('\x1b'));
+    assert!(text.contains("READ") && text.contains("✓ probe"));
+    assert!(text.contains("⇒ today's configuration is 33k of the median start 75k"));
+    assert!(text.contains("████"));
+    assert!(text.contains("loaded on demand, not sent at start"));
 }

@@ -7,6 +7,7 @@
 //! that are not known are counted in [`ReadStats`], never fatal. Only usage fields are read;
 //! message content is skipped without being parsed.
 
+pub mod probe;
 mod raw;
 
 use agentmeter_core::model::{Compaction, Dataset, ReadStats, Request, SessionStart};
@@ -134,6 +135,9 @@ struct FileFacts {
     first_message_is_root: Option<bool>,
     /// Lines carry a session id other than the file name: resume or fork copied history.
     foreign_session: bool,
+    /// `entrypoint` and `cwd` of the first line that has them.
+    entrypoint: Option<String>,
+    cwd: Option<String>,
 }
 
 impl Reader {
@@ -195,6 +199,12 @@ impl Reader {
                         .first_message_is_root
                         .get_or_insert(line.parent_uuid.is_none());
                 }
+                if facts.entrypoint.is_none() {
+                    facts.entrypoint = line.entrypoint.clone().filter(|e| !e.is_empty());
+                }
+                if facts.cwd.is_none() {
+                    facts.cwd = line.cwd.clone().filter(|c| !c.is_empty());
+                }
                 if line
                     .session_id
                     .as_deref()
@@ -234,6 +244,8 @@ impl Reader {
                 source,
                 clean: reason.is_none(),
                 reason,
+                entrypoint: facts.entrypoint,
+                cwd: facts.cwd,
             });
         }
     }

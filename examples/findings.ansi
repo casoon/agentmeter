@@ -1,9 +1,72 @@
-[2mlast 7 days · 135 sessions · Claude Code[0m
+agentmeter · Claude Code · last 7 days
 
-[33m![0m  baseline-load   first request of a session: median 79k tokens
-[2m   system prompt, tools, instructions and memory; not broken down[0m
-[33m![0m  big-context     27 % of tokens from requests above 500k, cache share 98 %
-[2m   cheap while cached; shown so you can judge the trade-off[0m
-[36m?[0m  cache-rebuild   343 of 1,243 pauses over 5 min followed by a write above 100k
-[2m   cause per rebuild: expected, gap over 1 h, 5 min cache likely expired, or unknown[0m
-[2m·  long-session    19 of 135 sessions span more than 24 hours[0m
+READ
+  ✓ logs      1,299 files, 856,227 lines from ~/.claude/projects · version
+              2.1.170 – 2.1.309
+  ✓ observed  2026-06-14T17:33:36Z – 2026-10-30T19:35:35Z · 130,425 requests in all
+  ✓ quality   every line readable
+  ✓ rules     5 of 5 measurable in this source
+  ✓ probe     /context in 4 of 4 places (empty directory, web-casoon-dev, kestrel,
+              chartlet); answered locally, no model request · claude -p /context
+              --no-session-persistence --output-format json
+
+FINDINGS   ? 3 to look at   ✓ 1 fine   ✓ 1 nothing found
+────────────────────────────────────────────────────────────────────────────────────────
+
+? baseline-load                                      look at it · notice · observed · v1
+  ⇒ today's configuration is 34k of the median start 79k (43 %); 34k more is in every
+    start (front end, project instructions, a short first prompt) and 11k varies per
+    session; 146 of 146 starts came from claude-desktop, whose own instructions and
+    tools /context in the CLI does not see; project kestrel adds 8k (project
+    instructions or MCP servers)
+
+    spread of session starts                         ├──┃━━───────┤
+      smallest 68k · quartiles 76k / 87k · median 79k · largest 114k
+    median start, split            ██████████████▓▓▓▓▓▓▓▓▓▓▓▓▓▓░░░░     79k
+      █ configuration (/context, empty directory)                       34k
+      ▓ rest of the smallest start                                      34k
+      ░ varies per session (median minus smallest)                      11k
+
+    today's configuration, /context in an empty directory · claude-opus-5[1m]
+    System tools                   ████████████████████████     19k
+    Skills                         ████████████▌···········     10k
+    System prompt                  ███▊····················      3k
+    Memory files                   █▊······················      1k
+    Custom agents                  ▋·······················     514
+    loaded on demand, not sent at start: System tools (deferred) 29k · MCP tools
+    (deferred) 12k
+    MCP servers: webspire 9k · context7 3k · plugin_cloudflare_cloudflare-docs 561
+    memory files: ~/.claude/CLAUDE.md 1k
+    in the project directory: web-casoon-dev +4k · kestrel +8k · chartlet +400
+
+? cache-rebuild                                      look at it · notice · observed · v1
+  ⇒ 202 rebuilds (60.1 M) are in sub-agent files, which wrote 100 % of their caches with
+    5 min while the main conversation wrote 100 % with 1 h; the log does not show
+    whether a setting reaches sub-agents; 147 of 349 unexpected rebuilds (42.4 M) follow
+    pauses over 1 h, which no cache lifetime covers
+
+    pause over 1 h                 █████████████████·······  42.4 M  147 rebuilds
+    5 min expired, main session    ························       0  0 rebuilds
+    5 min expired, sub-agents      ████████████████████████  60.1 M  202 rebuilds
+    cause unknown                  ························       0  0 rebuilds
+    expected (model, compaction)   ▌·······················   1.2 M  3 rebuilds
+
+? long-session                                         look at it · info · observed · v1
+  ⇒ 22 sessions ran over a day, idle time included; only a change of topic inside one
+    makes a fresh session worth it, and the log does not show topics
+
+    runemark · 0f903e83            ████████████████████████   155 h  500 requests
+    auditmysite · 1dadfa98         ██████████████████▏·····   117 h  116 requests
+    astro-site-files · 0f91e74f    ██████████████████······   116 h  389 requests
+
+✓ big-context                                              fine · notice · observed · v2
+  ⇒ cheap while cached: 98 % of these tokens were cache reads; 39 % of these tokens sit
+    in 3 of 22 sessions; whether that length helped the task the log cannot show
+
+    kestrel · 21a6b55d             ██████▌·················   360 M  509 requests
+    web-casoon · 2e02dbf0          ████▌···················   250 M  355 requests
+    kestrel · 3ad3ed6b             ████▏···················   227 M  316 requests
+    19 other sessions              ████████████████████████  1.32 G  2,076 requests
+
+✓ compact-thrash  nothing to report: 0 of 15 automatic compaction pairs came with under
+                  100k of context growth (v1)

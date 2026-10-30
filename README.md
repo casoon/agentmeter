@@ -8,10 +8,10 @@ usage, each with the evidence behind it, how sure it is and one concrete thing t
 > definitions may change.
 
 <p align="center">
-  <img src=".github/readme/demo.svg" alt="Terminal recording of agentmeter --tool claude --findings: one cache-rebuild finding with its measure, evidence, counter-arguments and next step, then the rules that found nothing, and the data quality. The logs are small synthetic sample data, not real usage." width="900">
+  <img src=".github/readme/demo.svg" alt="Terminal recording of agentmeter --tool claude --findings --probe: a status block of what was read, then a cache-rebuild finding marked as a lever with its breakdown bars and the 1 h estimate, a baseline-load finding that splits the median session start into configuration and the rest, and the rules that found nothing. The logs are small synthetic sample data, not real usage." width="900">
 </p>
 
-<p align="center"><sub>Recorded output of <code>agentmeter --findings</code> on synthetic sample logs from <code>tests/fixtures</code>.</sub></p>
+<p align="center"><sub>Recorded output of <code>agentmeter --findings --probe</code> on synthetic sample logs from <code>examples/demo-logs</code>.</sub></p>
 
 ## Install
 
@@ -48,6 +48,11 @@ Existing tools add up tokens and cost. agentmeter looks at how usage came about:
 - sessions that span many hours or days
 - which sessions and projects account for the input
 
+Each finding opens with a conclusion: **lever** (a setting or habit you control moves the
+number; weigh it), **look at it** (the logs cannot decide; the evidence needs a look) or **fine**.
+Bars show what the number is made of, and a block at the top shows what was read, how well, and
+which rules could be measured.
+
 High usage does not prove waste, and usage logs do not show the quality of a result. Every rule
 therefore states what it measured, its denominator and sample size, known counter-examples and
 what it does *not* conclude. "No findings" and "not enough data" are reported separately, and the
@@ -55,14 +60,29 @@ report lists data gaps: observed period, files without usage, unreadable entries
 and entry types.
 
 ```
-!  baseline-load   first request of a session: median 79k tokens
-   system prompt, tools, instructions and memory; not broken down
-!  big-context     27 % of tokens from requests above 500k, cache share 98 %
-   cheap while cached; shown so you can judge the trade-off
-?  cache-rebuild   343 of 1,243 pauses over 5 min followed by a write above 100k
+READ
+  ✓ logs      1,299 files, 855,776 lines from ~/.claude/projects
+  ✓ probe     /context in 4 of 4 places; answered locally, no model request
+
+FINDINGS   ? 3 to look at   ✓ 1 fine   ✓ 1 nothing found
+
+? cache-rebuild                                      look at it · notice · observed · v1
+  ⇒ 202 rebuilds (60.1 M) are in sub-agent files, which wrote 100 % of their caches with
+    5 min while the main conversation wrote 100 % with 1 h; …
+
+    pause over 1 h                 █████████████████·······  42.4 M  147 rebuilds
+    5 min expired, main session    ························       0  0 rebuilds
+    5 min expired, sub-agents      ████████████████████████  60.1 M  202 rebuilds
+
+? baseline-load                                      look at it · notice · observed · v1
+  ⇒ today's configuration is 34k of the median start 79k (43 %); 34k more is in every
+    start (front end, project instructions, a short first prompt) and 11k varies per
+    session; 146 of 146 starts came from claude-desktop, …
+
+    median start, split            ██████████████▓▓▓▓▓▓▓▓▓▓▓▓▓▓░░░░     79k
 ```
 
-(Shortened; figures from one author's logs. The full output is `agentmeter --findings`.)
+(Shortened; figures from one author's logs. The full output is `agentmeter --findings --probe`.)
 
 ## Usage
 
@@ -71,7 +91,8 @@ agentmeter                     # on a terminal: menu; otherwise the summary of e
 agentmeter --summary           # totals, days and compactions
 agentmeter --sessions          # sessions by input
 agentmeter --projects          # projects by input
-agentmeter --findings          # rules with measure, evidence and next step
+agentmeter --findings          # rules with conclusion, measure, evidence and next step
+agentmeter --probe             # also ask Claude Code what a session start holds (see below)
 agentmeter --tool codex        # claude, codex or all (default)
 agentmeter --since 7d          # 7d, 30d or a date such as 2026-10-01
 agentmeter --project <name>    # one project
@@ -84,12 +105,30 @@ It reads `~/.claude/projects` (or `$CLAUDE_CONFIG_DIR`) and `~/.codex/sessions` 
 support, for example cache rebuilds without cache-write data, are reported as "not measurable". Colour is used only on a terminal and
 not when `NO_COLOR` is set.
 
+## Asking Claude Code: `--probe`
+
+The logs show how large the first request of a session is, not what it is made of. `--probe` asks
+Claude Code itself: it runs `claude -p /context --no-session-persistence --output-format json` in
+an empty directory and in the three busiest projects of the period, and splits the median session
+start into today's configuration (system prompt, tools, skills, memory files, MCP servers), the
+rest of the smallest start and what varies per session. Tools loaded on demand are listed apart,
+because they are not sent at the start.
+
+`/context` is answered locally: no model request, no cost, no session file. Starting `claude`
+does load the configuration of each directory, including its MCP servers and hooks, which is why
+the probe only runs when asked for (`--probe`, or *Context probe* in the menu). It measures
+today's configuration, not the one the period ran with, and it measures the command-line
+`claude`: the report names the front end that wrote the sessions, since a desktop app or IDE adds
+instructions and tools of its own.
+
 ## Privacy
 
-Read-only, no network, no telemetry. The log files contain prompt and tool text, so they are
+Read-only, no network, no telemetry; `--probe` is the one exception that starts another program
+(`claude`, see above). The log files contain prompt and tool text, so they are
 read in full, but agentmeter extracts only usage metadata (token counts, timestamps, model,
 session and project ids, compaction events). Prompt and tool text is not analysed, stored or
-printed; evidence points to a file and an event id, never to text.
+printed; evidence points to a file and an event id, never to text. With `--probe` the report also
+shows what `/context` lists: category sizes, paths of memory files and names of MCP servers.
 
 ## Limits
 

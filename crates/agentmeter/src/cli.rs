@@ -51,6 +51,8 @@ pub struct Options {
     pub since: Option<Since>,
     pub project: Option<String>,
     pub json: bool,
+    /// Ask Claude Code (`claude -p /context`) what a session start holds; implies findings.
+    pub probe: bool,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -90,6 +92,10 @@ where
             "--projects" => options.projects = true,
             "--findings" => options.findings = true,
             "--json" => options.json = true,
+            "--probe" => {
+                options.probe = true;
+                options.findings = true;
+            }
             "--since" => match args.next() {
                 Some(value) => match parse_since(&value) {
                     Some(since) => options.since = Some(since),
@@ -125,6 +131,11 @@ where
             _ => return Invocation::Error(format!("unknown option `{arg}`")),
         }
     }
+    if options.probe && options.tool == Tool::Codex {
+        return Invocation::Error(
+            "--probe asks Claude Code; it does not apply to codex".to_owned(),
+        );
+    }
     if !(options.sessions || options.projects || options.findings) {
         options.summary = true;
     }
@@ -142,7 +153,8 @@ Without options on a terminal agentmeter opens a menu; anywhere else it prints t
 
 Reads the Claude Code (~/.claude, or CLAUDE_CONFIG_DIR) and Codex CLI (~/.codex, or
 CODEX_HOME) session logs and reports totals and findings with next steps.
-Read-only, no network. Each source is reported on its own.
+Read-only, no network. Each source is reported on its own. Only --probe starts another
+program: Claude Code itself.
 
 Options:
       --summary          Totals, days and compactions (default)
@@ -152,6 +164,11 @@ Options:
       --since <period>   Only requests from the last N days (7d) or from a date (2026-10-01)
       --tool <name>      claude, codex or all (default: every source that has data)
       --project <name>   Only projects whose name contains <name>
+      --probe            Ask Claude Code what a session start holds: runs
+                         `claude -p /context` in an empty directory and in the three
+                         busiest projects. Answered locally, no model request and no
+                         session file, but it starts claude with that directory's
+                         configuration (MCP servers, hooks). Implies --findings.
       --json             Print JSON instead of text (schema: docs/reference/json.md)
       --check <name>     data-quality: exit 1 if a source has unreadable data or none to
                          analyse, 0 otherwise, 2 for a bad call. Findings never fail it.
@@ -211,6 +228,18 @@ mod tests {
         };
         assert!(message.contains("data-quality"));
         assert!(matches!(run(&["--check"]), Invocation::Error(_)));
+    }
+
+    #[test]
+    fn probe_implies_findings_and_needs_claude() {
+        let Invocation::Run(options) = run(&["--probe"]) else {
+            panic!("expected a run");
+        };
+        assert!(options.probe && options.findings && !options.summary);
+        assert!(matches!(
+            run(&["--probe", "--tool", "codex"]),
+            Invocation::Error(_)
+        ));
     }
 
     #[test]
