@@ -119,6 +119,18 @@ fn bad_flag_exits_two_and_missing_logs_exit_one() {
 }
 
 #[test]
+fn project_without_a_match_exits_one() {
+    let out = run("epoch-current", &["--project", "no-such-project"]);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("no project matches"));
+    assert!(
+        run("epoch-current", &["--project", "demo"])
+            .status
+            .success()
+    );
+}
+
+#[test]
 fn sources_are_reported_separately_with_their_own_data_quality() {
     let output = run_both(
         "epoch-current",

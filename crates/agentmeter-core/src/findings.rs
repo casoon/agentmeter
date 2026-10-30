@@ -359,7 +359,7 @@ fn baseline_load(
             "the first request also contains your first prompt and attachments",
             "a session started from another directory or with a large first task starts larger",
         ],
-        next_step: "open a fresh session in an empty directory and compare its first request; the agent's own context view (for example /context in Claude Code) lists the components".into(),
+        next_step: "open a fresh session in an empty directory and compare its first request; in Claude Code, /context lists the components".into(),
         values: values(vec![
             ("p25_tokens", json!(p25)),
             ("p75_tokens", json!(p75)),

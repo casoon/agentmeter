@@ -148,7 +148,12 @@ fn summary_text(s: &Summary, style: Style) -> String {
     if !s.models.is_empty() {
         out += &heading(style, "MODELS");
         for m in s.models.iter().take(TABLE_ROWS) {
-            out += &format!("  {:<28} {:>8}\n", clip(&m.model, 28), count(m.requests));
+            let name = if m.model.is_empty() {
+                "(unknown)"
+            } else {
+                &m.model
+            };
+            out += &format!("  {:<28} {:>8}\n", clip(name, 28), count(m.requests));
         }
     }
     out
