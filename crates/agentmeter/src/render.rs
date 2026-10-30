@@ -1,33 +1,46 @@
 //! Text and JSON output.
 
-use agentmeter_core::findings::{Evaluation, Level};
+use agentmeter_core::findings::{Evaluation, Finding, Part};
 use agentmeter_core::format::{count, tokens};
-use agentmeter_core::model::{DataQuality, ReadStats};
+use agentmeter_core::model::{DataQuality, PROBE_EMPTY_PLACE, Probe, ProbeItem, ReadStats};
 use agentmeter_core::report::{ProjectRow, SessionRow, Summary};
+use runemark::{ColorMode, Console, Tone};
 use serde_json::{Value, json};
+use std::path::PathBuf;
 
 /// Rows shown per table; the JSON output carries all of them.
 const TABLE_ROWS: usize = 20;
 
-/// ANSI styling, switched off for pipes and `NO_COLOR`.
+/// Colour through runemark's tones, switched off for pipes and `NO_COLOR`. Bars and symbols stay
+/// without colour, so a pipe or `NO_COLOR` keeps the picture.
 #[derive(Clone, Copy)]
 pub struct Style {
     pub color: bool,
 }
 
 impl Style {
-    fn paint(self, code: &str, text: &str) -> String {
+    fn console(self) -> Console {
+        Console::new(
+            if self.color {
+                ColorMode::Always
+            } else {
+                ColorMode::Never
+            },
+            true,
+        )
+    }
+    fn tone(self, tone: Tone, text: &str) -> String {
+        self.console().paint(tone, text)
+    }
+    fn bold(self, text: &str) -> String {
         if self.color {
-            format!("\x1b[{code}m{text}\x1b[0m")
+            format!("\x1b[1m{text}\x1b[0m")
         } else {
             text.to_owned()
         }
     }
-    fn bold(self, text: &str) -> String {
-        self.paint("1", text)
-    }
     fn dim(self, text: &str) -> String {
-        self.paint("2", text)
+        self.tone(Tone::Muted, text)
     }
 }
 
@@ -37,12 +50,21 @@ pub struct Report<'a> {
     pub label: &'a str,
     pub period: String,
     pub project: Option<&'a str>,
+    /// The directories the logs were read from.
+    pub places: &'a [PathBuf],
     pub quality: &'a DataQuality,
     pub summary: Option<&'a Summary>,
     pub sessions: Option<&'a [SessionRow]>,
     pub projects: Option<&'a [ProjectRow]>,
     pub findings: Option<&'a Evaluation>,
+    pub probe: Option<&'a Probe>,
 }
+
+/// Width the text is wrapped to; bars are [`BAR`] cells wide.
+const WIDTH: usize = 88;
+const BAR: usize = 24;
+/// Width of the label column in breakdowns.
+const LABEL: usize = 30;
 
 fn pct(value: f64) -> String {
     format!("{value:.0} %")
@@ -59,7 +81,54 @@ fn clip(text: &str, width: usize) -> String {
 }
 
 fn heading(style: Style, title: &str) -> String {
-    format!("\n{}\n", style.bold(title))
+    format!("\n{}\n", style.tone(Tone::Title, title))
+}
+
+/// A horizontal bar of `width` cells for `value` of `max`, in eighths; the empty rest is a dim
+/// track so bars of one block line up.
+fn bar(style: Style, tone: Tone, value: u64, max: u64, width: usize) -> String {
+    const EIGHTHS: [&str; 8] = ["", "▏", "▎", "▍", "▌", "▋", "▊", "▉"];
+    let eighths = if max == 0 {
+        0
+    } else {
+        ((value as f64 / max as f64) * (width * 8) as f64).round() as usize
+    };
+    // A value above zero always shows.
+    let eighths = if value > 0 { eighths.max(1) } else { 0 }.min(width * 8);
+    let mut filled = "█".repeat(eighths / 8);
+    filled += EIGHTHS[eighths % 8];
+    let used = eighths / 8 + usize::from(eighths % 8 > 0);
+    format!(
+        "{}{}",
+        style.tone(tone, &filled),
+        style.dim(&"·".repeat(width - used))
+    )
+}
+
+/// Words wrapped to [`WIDTH`]: the first line after `first`, the others after `rest`.
+fn wrap(text: &str, first: &str, rest: &str, visible_first: usize) -> String {
+    let mut out = String::from(first);
+    let mut column = visible_first;
+    let indent = rest.chars().count();
+    let mut at_start = true;
+    for word in text.split_whitespace() {
+        let len = word.chars().count();
+        if !at_start && column + 1 + len > WIDTH {
+            out += "\n";
+            out += rest;
+            column = indent;
+            at_start = true;
+        }
+        if !at_start {
+            out.push(' ');
+            column += 1;
+        }
+        out += word;
+        column += len;
+        at_start = false;
+    }
+    out += "\n";
+    out
 }
 
 pub fn text(report: &Report, style: Style) -> String {
@@ -73,11 +142,12 @@ pub fn text(report: &Report, style: Style) -> String {
         report.label,
         report.period
     );
+    out += &read_text(report, style);
     if let Some(summary) = report.summary {
         out += &summary_text(summary, style);
     }
     if let Some(findings) = report.findings {
-        out += &findings_text(findings, style);
+        out += &findings_text(findings, report.probe, style);
     }
     if let Some(sessions) = report.sessions {
         out += &sessions_text(sessions, style);
@@ -85,7 +155,6 @@ pub fn text(report: &Report, style: Style) -> String {
     if let Some(projects) = report.projects {
         out += &projects_text(projects, style);
     }
-    out += &read_text(report.quality, style);
     out
 }
 
@@ -98,23 +167,34 @@ fn summary_text(s: &Summary, style: Style) -> String {
     };
     out += &format!(
         "  Requests      {}  (sub-agents {})\n",
-        count(s.requests),
+        style.bold(&count(s.requests)),
         pct(sub)
     );
     out += &format!(
         "  Sessions      {}  in {} projects\n",
-        count(s.sessions),
+        style.bold(&count(s.sessions)),
         count(s.projects)
     );
     out += &format!(
         "  Input         {}  cache read {} · written {} (5 min {} · 1 h {})\n",
-        tokens(s.input),
+        style.bold(&tokens(s.input)),
         pct(s.cache_read_pct),
         tokens(s.cache_write_5m + s.cache_write_1h),
         tokens(s.cache_write_5m),
         tokens(s.cache_write_1h)
     );
-    out += &format!("  Output        {}\n", tokens(s.output));
+    out += &format!(
+        "                {} {}\n",
+        bar(
+            style,
+            Tone::Success,
+            s.cache_read_pct.round() as u64,
+            100,
+            BAR
+        ),
+        style.dim("share read from cache")
+    );
+    out += &format!("  Output        {}\n", style.bold(&tokens(s.output)));
     let c = &s.compactions;
     if c.total == 0 {
         out += "  Compactions   none\n";
@@ -131,21 +211,27 @@ fn summary_text(s: &Summary, style: Style) -> String {
         );
     }
     if !s.days.is_empty() {
+        let max = s.days.iter().map(|d| d.input).max().unwrap_or(0);
         out += &heading(style, "DAYS (UTC)");
-        out += &style.dim("  Day          Requests     Input   Cache  Compactions");
+        out += &style.dim(&format!(
+            "  Day          Requests     Input  {:<BAR$}  Cache  Compactions",
+            "Input"
+        ));
         out += "\n";
         for d in &s.days {
             out += &format!(
-                "  {}  {:>8}  {:>8}  {:>5}  {:>11}\n",
+                "  {}  {:>8}  {:>8}  {}  {:>5}  {:>11}\n",
                 d.date,
                 count(d.requests),
                 tokens(d.input),
+                bar(style, Tone::Info, d.input, max, BAR),
                 pct(d.cache_read_pct),
                 d.compactions
             );
         }
     }
     if !s.models.is_empty() {
+        let max = s.models.iter().map(|m| m.requests).max().unwrap_or(0);
         out += &heading(style, "MODELS");
         for m in s.models.iter().take(TABLE_ROWS) {
             let name = if m.model.is_empty() {
@@ -153,14 +239,268 @@ fn summary_text(s: &Summary, style: Style) -> String {
             } else {
                 &m.model
             };
-            out += &format!("  {:<28} {:>8}\n", clip(name, 28), count(m.requests));
+            out += &format!(
+                "  {:<28} {:>8}  {}\n",
+                clip(name, 28),
+                count(m.requests),
+                bar(style, Tone::Info, m.requests, max, BAR)
+            );
         }
     }
     out
 }
 
-fn findings_text(evaluation: &Evaluation, style: Style) -> String {
-    let mut out = heading(style, "FINDINGS");
+/// Symbol, word and tone of a conclusion kind.
+fn kind_mark(kind: &str) -> (&'static str, &'static str, Tone) {
+    match kind {
+        "lever" => ("◆", "lever", Tone::Warning),
+        "look" => ("?", "look at it", Tone::Info),
+        _ => ("✓", "fine", Tone::Success),
+    }
+}
+
+fn kind_rank(kind: &str) -> u8 {
+    match kind {
+        "lever" => 0,
+        "look" => 1,
+        _ => 2,
+    }
+}
+
+fn value_text(value: u64, unit: &str) -> String {
+    match unit {
+        "tokens" => tokens(value),
+        "hours" => format!("{value} h"),
+        _ => count(value),
+    }
+}
+
+/// One row per part: label, bar against the largest part, value and count.
+fn parts_text(parts: &[Part], tone: Tone, style: Style) -> String {
+    let max = parts.iter().map(|p| p.value).max().unwrap_or(0);
+    let mut out = String::new();
+    for p in parts {
+        let counted = match (p.count, p.count_unit) {
+            (Some(n), Some(unit)) => format!("  {} {unit}", count(n)),
+            _ => String::new(),
+        };
+        out += &format!(
+            "    {:<LABEL$} {} {:>7}{}\n",
+            clip(&p.label, LABEL),
+            bar(style, tone, p.value, max, BAR),
+            value_text(p.value, p.unit),
+            style.dim(&counted)
+        );
+    }
+    out
+}
+
+/// Where the session starts lie: smallest, quartiles, median and largest on one scale.
+fn spread_text(f: &Finding, style: Style) -> String {
+    let get = |key: &str| f.values.get(key).and_then(Value::as_u64);
+    let (Some(min), Some(p25), Some(p75), Some(max)) = (
+        get("min_tokens"),
+        get("p25_tokens"),
+        get("p75_tokens"),
+        get("max_tokens"),
+    ) else {
+        return String::new();
+    };
+    let median = f.measure.value as u64;
+    let width = BAR + 8;
+    let at = |v: u64| ((v as f64 / max.max(1) as f64) * (width - 1) as f64).round() as usize;
+    let mut cells = vec![' '; width];
+    for (i, cell) in cells.iter_mut().enumerate() {
+        if i >= at(min) && i <= at(max) {
+            *cell = '─';
+        }
+        if i >= at(p25) && i <= at(p75) {
+            *cell = '━';
+        }
+    }
+    cells[at(min)] = '├';
+    cells[at(max)] = '┤';
+    cells[at(median)] = '┃';
+    let line: String = cells.into_iter().collect();
+    format!(
+        "    {:<LABEL$} {}\n    {:<LABEL$} {}\n",
+        "spread of session starts",
+        style.tone(Tone::Info, &line),
+        "",
+        style.dim(&format!(
+            "smallest {} · quartiles {} / {} · median {} · largest {}",
+            tokens(min),
+            tokens(p25),
+            tokens(p75),
+            tokens(median),
+            tokens(max)
+        ))
+    )
+}
+
+/// The median start as one stacked bar: configuration, the rest of the smallest start, and
+/// what varies per session.
+fn stacked_text(parts: &[Part], style: Style) -> String {
+    let total: u64 = parts.iter().map(|p| p.value).sum();
+    let tones = [Tone::Warning, Tone::Info, Tone::Muted];
+    let glyphs = ["█", "▓", "░"];
+    let mut line = String::new();
+    let mut used = 0;
+    for (i, p) in parts.iter().enumerate().take(3) {
+        let cells = if i == parts.len().min(3) - 1 {
+            (BAR + 8).saturating_sub(used)
+        } else {
+            ((p.value as f64 / total.max(1) as f64) * (BAR + 8) as f64).round() as usize
+        };
+        used += cells;
+        line += &style.tone(tones[i], &glyphs[i].repeat(cells));
+    }
+    let mut out = format!(
+        "    {:<LABEL$} {} {:>7}\n",
+        "median start, split",
+        line,
+        tokens(total)
+    );
+    for (i, p) in parts.iter().enumerate().take(3) {
+        out += &format!(
+            "      {} {:<w$} {:>7}\n",
+            style.tone(tones[i], glyphs[i]),
+            p.label,
+            tokens(p.value),
+            w = LABEL - 3 + BAR + 8
+        );
+    }
+    out
+}
+
+/// What `/context` reported: the configuration run in full, the project runs as differences.
+fn probe_text(probe: &Probe, style: Style) -> String {
+    let mut out = String::new();
+    if let Some(base) = probe.baseline() {
+        out += &format!(
+            "\n    {}\n",
+            style.bold(&format!(
+                "today's configuration, /context in an empty directory{}",
+                base.model
+                    .as_deref()
+                    .map_or(String::new(), |m| format!(" · {m}"))
+            ))
+        );
+        let max = base.sent.iter().map(|i| i.tokens).max().unwrap_or(0);
+        for item in &base.sent {
+            out += &format!(
+                "    {:<LABEL$} {} {:>7}\n",
+                clip(&item.label, LABEL),
+                bar(style, Tone::Warning, item.tokens, max, BAR),
+                tokens(item.tokens)
+            );
+        }
+        let list = |items: &[ProbeItem], n: usize| {
+            items
+                .iter()
+                .take(n)
+                .map(|i| format!("{} {}", i.label, tokens(i.tokens)))
+                .collect::<Vec<_>>()
+                .join(" · ")
+        };
+        if !base.deferred.is_empty() {
+            out += &wrap(
+                &style.dim(&format!(
+                    "loaded on demand, not sent at start: {}",
+                    list(&base.deferred, 5)
+                )),
+                "    ",
+                "    ",
+                4,
+            );
+        }
+        if !base.mcp_servers.is_empty() {
+            out += &wrap(
+                &format!("MCP servers: {}", list(&base.mcp_servers, 6)),
+                "    ",
+                "      ",
+                4,
+            );
+        }
+        if !base.memory_files.is_empty() {
+            out += &wrap(
+                &format!("memory files: {}", list(&base.memory_files, 6)),
+                "    ",
+                "      ",
+                4,
+            );
+        }
+        let projects: Vec<String> = probe
+            .runs
+            .iter()
+            .filter(|r| r.place != PROBE_EMPTY_PLACE)
+            .map(|r| {
+                let delta = r.total as i64 - base.total as i64;
+                let sign = if delta >= 0 { "+" } else { "−" };
+                format!("{} {sign}{}", r.place, tokens(delta.unsigned_abs()))
+            })
+            .collect();
+        if !projects.is_empty() {
+            out += &wrap(
+                &format!("in the project directory: {}", projects.join(" · ")),
+                "    ",
+                "      ",
+                4,
+            );
+        }
+    }
+    for failure in &probe.failures {
+        out += &format!(
+            "    {} probe in {} failed: {}\n",
+            style.tone(Tone::Error, "✗"),
+            failure.place,
+            failure.reason
+        );
+    }
+    out
+}
+
+fn findings_text(evaluation: &Evaluation, probe: Option<&Probe>, style: Style) -> String {
+    let mut out = String::new();
+    let tally = |kind: &str| {
+        evaluation
+            .findings
+            .iter()
+            .filter(|f| f.conclusion.kind == kind)
+            .count()
+    };
+    let status = |s: &str| evaluation.rules.iter().filter(|r| r.status == s).count();
+    let headline = [
+        (tally("lever"), "lever", "levers", "◆", Tone::Warning),
+        (tally("look"), "to look at", "to look at", "?", Tone::Info),
+        (tally("fine"), "fine", "fine", "✓", Tone::Success),
+        (
+            status("checked_none"),
+            "nothing found",
+            "nothing found",
+            "✓",
+            Tone::Success,
+        ),
+        (
+            status("not_measurable"),
+            "not measurable",
+            "not measurable",
+            "·",
+            Tone::Muted,
+        ),
+    ]
+    .iter()
+    .filter(|(n, ..)| *n > 0)
+    .map(|(n, one, many, mark, tone)| {
+        style.tone(
+            *tone,
+            &format!("{mark} {n} {}", if *n == 1 { one } else { many }),
+        )
+    })
+    .collect::<Vec<_>>()
+    .join("   ");
+    out += &format!("\n{}   {headline}\n", style.tone(Tone::Title, "FINDINGS"));
+    out += &style.dim(&format!("{}\n", "─".repeat(WIDTH)));
     match evaluation.verdict {
         "no_data" => {
             out += "  No analysis possible: no requests with usage in the selected period.\n"
@@ -170,45 +510,131 @@ fn findings_text(evaluation: &Evaluation, style: Style) -> String {
         }
         _ => {}
     }
-    for f in &evaluation.findings {
-        let (mark, code) = match f.level {
-            Level::Finding => ("✗", "31"),
-            Level::Notice => ("!", "33"),
-            Level::Info => ("i", "36"),
-        };
-        out += &format!(
-            "  {} {} {}\n",
-            style.paint(code, mark),
-            style.bold(&format!("{} v{}", f.rule, f.rule_version)),
-            style.dim(&format!("{} · {}", f.level.label(), f.certainty))
+    let mut findings: Vec<&Finding> = evaluation.findings.iter().collect();
+    findings.sort_by_key(|f| (kind_rank(f.conclusion.kind), f.level));
+    for f in findings {
+        let (mark, word, tone) = kind_mark(f.conclusion.kind);
+        let title = format!("{mark} {}", f.rule);
+        let tags = format!(
+            "{word} · {} · {} · v{}",
+            f.level.label(),
+            f.certainty,
+            f.rule_version
         );
-        out += &format!("    {}\n", f.message);
+        let pad = WIDTH.saturating_sub(title.chars().count() + tags.chars().count() + 2);
+        out += &format!(
+            "\n{}{}{}\n",
+            style.tone(tone, &title),
+            " ".repeat(pad + 2),
+            style.dim(&tags)
+        );
+        out += &wrap(&style.bold(&f.conclusion.text), "  ⇒ ", "    ", 4);
+        out += "\n";
+        if f.rule == "baseline-load" {
+            out += &spread_text(f, style);
+            if probe.and_then(Probe::baseline).is_some() {
+                out += &stacked_text(&f.parts, style);
+            } else {
+                out += &parts_text(&f.parts, tone, style);
+            }
+            if let Some(probe) = probe {
+                out += &probe_text(probe, style);
+            }
+        } else {
+            out += &parts_text(&f.parts, tone, style);
+        }
+        if f.rule == "cache-rebuild" {
+            let get = |key: &str| f.values.get(key).and_then(Value::as_u64);
+            if let (Some(saved), Some(extra)) = (
+                get("ttl_1h_saved_equivalent"),
+                get("ttl_1h_extra_equivalent"),
+            ) {
+                out += &format!(
+                    "    {:<LABEL$} {}\n",
+                    "1 h lifetime, estimate",
+                    style.dim(&format!(
+                        "saves {} · costs {} more · net {}{}",
+                        tokens(saved),
+                        tokens(extra),
+                        if saved >= extra { "+" } else { "−" },
+                        tokens(saved.abs_diff(extra))
+                    ))
+                );
+            }
+        }
+        out += "\n";
+        out += &wrap(&f.message, "    measured  ", "              ", 14);
         let m = &f.measure;
-        out += &style.dim(&format!(
-            "    measure: {} = {} {} of {} {} (sample {} {})\n",
-            m.name,
-            m.value,
-            m.unit,
-            count(m.denominator),
-            m.denominator_unit,
-            count(m.sample),
-            m.sample_unit
-        ));
+        out += &wrap(
+            &style.dim(&format!(
+                "{} = {} {} of {} {} (sample {} {})",
+                m.name,
+                m.value,
+                m.unit,
+                count(m.denominator),
+                m.denominator_unit,
+                count(m.sample),
+                m.sample_unit
+            )),
+            "              ",
+            "              ",
+            14,
+        );
         for e in &f.evidence {
-            out += &style.dim(&format!("    evidence: {} · {}\n", e.file, e.event));
+            out += &style.dim(&format!("    evidence  {} · {}\n", e.file, e.event));
         }
         for c in &f.counterexamples {
-            out += &style.dim(&format!("    but: {c}\n"));
+            out += &wrap(
+                &style.dim(c),
+                &style.dim("    but       "),
+                "              ",
+                14,
+            );
         }
-        out += &format!("    {} {}\n", style.bold("next:"), f.next_step);
+        out += &wrap(
+            &f.next_step,
+            &format!("    {}      ", style.bold("next")),
+            "              ",
+            14,
+        );
     }
     // Every rule appears once per source: observed above, the others as checked or not measurable.
-    for r in evaluation.rules.iter().filter(|r| r.status != "observed") {
-        let line = match (r.status, &r.message, &r.reason) {
-            ("checked_none", Some(message), _) => format!("checked, nothing to report: {message}"),
-            (_, _, reason) => format!("not measurable: {}", reason.as_deref().unwrap_or("")),
+    let quiet: Vec<_> = evaluation
+        .rules
+        .iter()
+        .filter(|r| r.status != "observed")
+        .collect();
+    if !quiet.is_empty() {
+        out += "\n";
+    }
+    for r in quiet.iter() {
+        let (mark, tone, line) = match (r.status, &r.message, &r.reason) {
+            ("checked_none", Some(message), _) => {
+                ("✓", Tone::Success, format!("nothing to report: {message}"))
+            }
+            (_, _, reason) => (
+                "·",
+                Tone::Muted,
+                format!("not measurable: {}", reason.as_deref().unwrap_or("")),
+            ),
         };
-        out += &style.dim(&format!("  {} v{} {line}\n", r.rule, r.rule_version));
+        let first = format!("{} {:<16}", style.tone(tone, mark), r.rule);
+        out += &wrap(
+            &style.dim(&format!("{line} (v{})", r.rule_version)),
+            &first,
+            "                  ",
+            18,
+        );
+    }
+    // Without a baseline-load card the probe still has its say.
+    if let Some(probe) = probe.filter(|_| {
+        !evaluation
+            .findings
+            .iter()
+            .any(|f| f.rule == "baseline-load")
+    }) {
+        out += &format!("\n{}\n", style.tone(Tone::Title, "CONTEXT PROBE"));
+        out += &probe_text(probe, style);
     }
     out
 }
@@ -222,18 +648,22 @@ fn sessions_text(rows: &[SessionRow], style: Style) -> String {
             count(rows.len() as u64)
         ),
     );
-    out += &style
-        .dim("  Session   Project            Requests   Span     Peak   Input  Cache  Compact.");
+    let max = rows.iter().map(|r| r.input).max().unwrap_or(0);
+    out += &style.dim(&format!(
+        "  Session   Project            Requests   Span     Peak   Input  {:<16}  Cache  Compact.",
+        ""
+    ));
     out += "\n";
     for r in rows.iter().take(TABLE_ROWS) {
         out += &format!(
-            "  {:<8}  {:<18} {:>8}  {:>5.1} h  {:>6}  {:>6}  {:>5}  {:>6}\n",
+            "  {:<8}  {:<18} {:>8}  {:>5.1} h  {:>6}  {:>6}  {}  {:>5}  {:>6}\n",
             clip(&r.session, 8),
             clip(&r.project, 18),
             count(r.requests),
             r.hours,
             tokens(r.peak_context),
             tokens(r.input),
+            bar(style, Tone::Info, r.input, max, 16),
             pct(r.cache_read_pct),
             r.compactions
         );
@@ -250,51 +680,95 @@ fn projects_text(rows: &[ProjectRow], style: Style) -> String {
             count(rows.len() as u64)
         ),
     );
-    out += &style.dim("  Project                  Sessions  Requests   Input  Share  Cache");
+    out += &style.dim(&format!(
+        "  Project                  Sessions  Requests   Input  Share  {:<BAR$}  Cache",
+        ""
+    ));
     out += "\n";
     for r in rows.iter().take(TABLE_ROWS) {
         out += &format!(
-            "  {:<24} {:>8}  {:>8}  {:>6}  {:>5}  {:>5}\n",
+            "  {:<24} {:>8}  {:>8}  {:>6}  {:>5}  {}  {:>5}\n",
             clip(&r.project, 24),
             count(r.sessions),
             count(r.requests),
             tokens(r.input),
             pct(r.input_share_pct),
+            bar(
+                style,
+                Tone::Info,
+                (r.input_share_pct * 10.0).round() as u64,
+                1000,
+                BAR
+            ),
             pct(r.cache_read_pct)
         );
     }
     out
 }
 
-fn read_text(quality: &DataQuality, style: Style) -> String {
+/// What was read and how well: one line per stage, a mark for its state.
+fn read_text(report: &Report, style: Style) -> String {
+    let quality = report.quality;
     let stats: &ReadStats = &quality.read;
-    let mut out = String::new();
+    let ok = style.tone(Tone::Success, "✓");
+    let note = style.tone(Tone::Warning, "!");
+    let bad = style.tone(Tone::Error, "✗");
+    let mut out = heading(style, "READ");
+    let line = |mark: &str, what: &str, text: String| {
+        wrap(&text, &format!("  {mark} {what:<9} "), "              ", 14)
+    };
+    let places: Vec<String> = report
+        .places
+        .iter()
+        .map(|p| p.display().to_string())
+        .collect();
     let versions = match (&stats.first_version, &stats.last_version) {
         (Some(a), Some(b)) if a != b => format!(" · version {a} – {b}"),
         (Some(a), _) => format!(" · version {a}"),
         _ => String::new(),
     };
-    let observed = match (&quality.observed_from, &quality.observed_to) {
-        (Some(from), Some(to)) => format!("observed {from} – {to}"),
-        _ => "no requests observed".to_owned(),
-    };
-    out += &style.dim(&format!(
-        "\nData: {observed}\n  Read {} files, {} lines, {} requests{versions}\n",
-        count(stats.files),
-        count(stats.lines),
-        count(quality.requests)
-    ));
+    out += &line(
+        if stats.files > 0 { &ok } else { &bad },
+        "logs",
+        format!(
+            "{} files, {} lines from {}{versions}",
+            count(stats.files),
+            count(stats.lines),
+            if places.is_empty() {
+                "(none)".to_owned()
+            } else {
+                places.join(", ")
+            }
+        ),
+    );
+    match (&quality.observed_from, &quality.observed_to) {
+        (Some(from), Some(to)) => {
+            out += &line(
+                &ok,
+                "observed",
+                format!(
+                    "{from} – {to} · {} requests in all",
+                    count(quality.requests)
+                ),
+            )
+        }
+        _ => out += &line(&bad, "observed", "no requests with usage".to_owned()),
+    }
+
+    // Problems lose data; limits leave something unmeasured; info only says what was done.
+    let mut problems = Vec::new();
     let mut notes = Vec::new();
-    if stats.files_without_usage > 0 {
-        notes.push(format!(
-            "{} files without usage",
-            count(stats.files_without_usage)
+    let mut info = Vec::new();
+    if stats.skipped_lines > 0 {
+        problems.push(format!(
+            "{} unreadable entries skipped",
+            count(stats.skipped_lines)
         ));
     }
-    if stats.placeholder_version_entries > 0 {
-        notes.push(format!(
-            "{} entries carry the placeholder version 0.0.0, left out of the version range",
-            count(stats.placeholder_version_entries)
+    if stats.compressed_files_unreadable > 0 {
+        problems.push(format!(
+            "{} compressed files unreadable (damaged or over the limits)",
+            count(stats.compressed_files_unreadable)
         ));
     }
     if stats.compressed_files_read
@@ -302,11 +776,23 @@ fn read_text(quality: &DataQuality, style: Style) -> String {
         + stats.compressed_files_shadowed
         > 0
     {
-        notes.push(format!(
+        info.push(format!(
             "compressed files (.zst): {} read, {} unreadable (damaged or over the limits), {} skipped because a plain copy exists",
             count(stats.compressed_files_read),
             count(stats.compressed_files_unreadable),
             count(stats.compressed_files_shadowed)
+        ));
+    }
+    if stats.files_without_usage > 0 {
+        notes.push(format!(
+            "{} files without usage",
+            count(stats.files_without_usage)
+        ));
+    }
+    if stats.placeholder_version_entries > 0 {
+        info.push(format!(
+            "{} entries carry the placeholder version 0.0.0, left out of the version range",
+            count(stats.placeholder_version_entries)
         ));
     }
     if !stats.cache_write_measured && quality.requests > 0 {
@@ -316,12 +802,6 @@ fn read_text(quality: &DataQuality, style: Style) -> String {
         notes.push(format!(
             "{} usage events whose change of the running total differs from the event's own value",
             count(stats.usage_delta_mismatches)
-        ));
-    }
-    if stats.skipped_lines > 0 {
-        notes.push(format!(
-            "{} unreadable entries skipped",
-            count(stats.skipped_lines)
         ));
     }
     if stats.requests_without_model > 0 {
@@ -343,7 +823,7 @@ fn read_text(quality: &DataQuality, style: Style) -> String {
         ));
     }
     if stats.duplicates_merged > 0 || stats.replays_dropped > 0 {
-        notes.push(format!(
+        info.push(format!(
             "{} duplicate lines merged, {} sub-agent replays dropped",
             count(stats.duplicates_merged),
             count(stats.replays_dropped)
@@ -361,9 +841,56 @@ fn read_text(quality: &DataQuality, style: Style) -> String {
             list(&stats.unknown_usage_fields)
         ));
     }
-    for note in notes {
-        out += &style.dim(&format!("  {note}"));
-        out += "\n";
+    if problems.is_empty() {
+        out += &line(&ok, "quality", "every line readable".to_owned());
+    }
+    for problem in problems {
+        out += &line(&bad, "quality", problem);
+    }
+    for n in notes {
+        out += &line(&note, "limit", n);
+    }
+    let dot = style.dim("·");
+    for n in info {
+        out += &line(&dot, "info", n);
+    }
+    if let Some(evaluation) = report.findings {
+        let measured = evaluation
+            .rules
+            .iter()
+            .filter(|r| r.status != "not_measurable")
+            .count();
+        let total = evaluation.rules.len();
+        out += &line(
+            if measured == total { &ok } else { &note },
+            "rules",
+            format!("{measured} of {total} measurable in this source"),
+        );
+    }
+    if let Some(probe) = report.probe {
+        let mark = if probe.failures.is_empty() {
+            &ok
+        } else if probe.runs.is_empty() {
+            &bad
+        } else {
+            &note
+        };
+        let places: Vec<&str> = probe.runs.iter().map(|r| r.place.as_str()).collect();
+        out += &line(
+            mark,
+            "probe",
+            format!(
+                "/context in {} of {} places ({}); answered locally, no model request · {}",
+                probe.runs.len(),
+                probe.runs.len() + probe.failures.len(),
+                if places.is_empty() {
+                    "none".to_owned()
+                } else {
+                    places.join(", ")
+                },
+                probe.command
+            ),
+        );
     }
     out
 }
@@ -438,6 +965,9 @@ fn json_source(report: &Report) -> Value {
     }
     if let Some(v) = report.projects {
         put("projects", json!(v));
+    }
+    if let Some(v) = report.probe {
+        put("probe", json!(v));
     }
     if let Some(v) = report.findings {
         put("verdict", json!(v.verdict));

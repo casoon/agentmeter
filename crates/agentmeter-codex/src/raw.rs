@@ -30,6 +30,8 @@ pub struct RawMeta {
     pub thread_source: Option<String>,
     #[serde(default)]
     pub forked_from_id: Option<String>,
+    #[serde(default)]
+    pub originator: Option<String>,
 }
 
 #[derive(Deserialize)]

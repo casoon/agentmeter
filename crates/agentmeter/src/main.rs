@@ -7,14 +7,15 @@ mod cli;
 mod menu;
 mod render;
 
-use agentmeter_core::model::Dataset;
+use agentmeter_core::model::{Dataset, PROBE_EMPTY_PLACE, Probe};
 use agentmeter_core::report::{ProjectRow, SessionRow, Summary, projects, sessions, summarize};
 use agentmeter_core::time::format_day;
 use agentmeter_core::{Compaction, DataQuality, Evaluation, Request, check, evaluate};
 use cli::{Check, Invocation, Options, Since, Tool};
 use render::{Report, Style};
+use std::collections::HashMap;
 use std::io::{self, IsTerminal};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -59,6 +60,8 @@ pub struct Analysis {
     pub sessions: Option<Vec<SessionRow>>,
     pub projects: Option<Vec<ProjectRow>>,
     pub findings: Option<Evaluation>,
+    /// What `--probe` asked Claude Code; only for the Claude source.
+    pub probe: Option<Probe>,
 }
 
 pub fn read_sources(tool: Tool) -> Vec<Source> {
@@ -94,10 +97,7 @@ pub fn read_sources(tool: Tool) -> Vec<Source> {
     sources
 }
 
-pub fn analyse(source: &mut Source, options: &Options, now_ms: i64) -> Analysis {
-    if let Some(name) = &options.project {
-        source.dataset.retain_project(name);
-    }
+pub fn analyse(source: &Source, options: &Options, now_ms: i64, probe: Option<Probe>) -> Analysis {
     let dataset = &source.dataset;
     let since_ms = options.since.map(|s| s.start_ms(now_ms));
     let in_window = |time_ms: i64| since_ms.is_none_or(|since| time_ms >= since);
@@ -117,8 +117,85 @@ pub fn analyse(source: &mut Source, options: &Options, now_ms: i64) -> Analysis 
         summary: options.summary.then(|| summarize(&requests, &compactions)),
         sessions: options.sessions.then(|| sessions(&requests, &compactions)),
         projects: options.projects.then(|| projects(&requests)),
-        findings: options.findings.then(|| evaluate(dataset, since_ms)),
+        findings: options
+            .findings
+            .then(|| evaluate(dataset, since_ms, probe.as_ref())),
+        probe,
     }
+}
+
+/// Projects probed besides the empty directory: the busiest by requests in the period.
+const PROBE_PROJECTS: usize = 3;
+
+/// Where to probe: an empty directory for the configuration alone, and the working directory
+/// of the latest session of each of the busiest projects, if it still exists.
+pub fn probe_places(
+    dataset: &Dataset,
+    since_ms: Option<i64>,
+    empty: &Path,
+) -> Vec<(String, PathBuf)> {
+    let in_window = |time_ms: i64| since_ms.is_none_or(|since| time_ms >= since);
+    let mut requests: HashMap<&str, u64> = HashMap::new();
+    // session -> (project, first request time)
+    let mut sessions: HashMap<&str, (&str, i64)> = HashMap::new();
+    for r in dataset.requests.iter().filter(|r| in_window(r.time_ms)) {
+        *requests.entry(r.project.as_str()).or_default() += 1;
+        let entry = sessions
+            .entry(r.session.as_str())
+            .or_insert((r.project.as_str(), r.time_ms));
+        entry.1 = entry.1.min(r.time_ms);
+    }
+    let mut ranked: Vec<(&str, u64)> = requests.into_iter().collect();
+    ranked.sort_by_key(|(project, n)| (std::cmp::Reverse(*n), *project));
+    let mut places = vec![(PROBE_EMPTY_PLACE.to_owned(), empty.to_path_buf())];
+    for (project, _) in ranked {
+        if places.len() > PROBE_PROJECTS {
+            break;
+        }
+        let latest = dataset
+            .session_starts
+            .iter()
+            .filter_map(|s| {
+                let (p, time) = sessions.get(s.session.as_str())?;
+                let dir = PathBuf::from(s.cwd.as_deref()?);
+                (*p == project && dir.is_dir()).then_some((*time, dir))
+            })
+            .max_by_key(|(time, _)| *time);
+        if let Some((_, dir)) = latest {
+            places.push((project.to_owned(), dir));
+        }
+    }
+    places
+}
+
+/// Runs the probe for the Claude source and says on stderr what it does, since it takes seconds.
+pub fn run_probe(source: &Source, since_ms: Option<i64>, tell: bool) -> Probe {
+    let empty = match agentmeter_claude::probe::EmptyDir::create() {
+        Ok(dir) => dir,
+        Err(e) => {
+            return Probe {
+                failures: vec![agentmeter_core::model::ProbeFailure {
+                    place: PROBE_EMPTY_PLACE.to_owned(),
+                    reason: format!("could not create a temporary directory: {e}"),
+                }],
+                ..Probe::default()
+            };
+        }
+    };
+    let places = probe_places(&source.dataset, since_ms, &empty.0);
+    if tell {
+        let names: Vec<&str> = places.iter().map(|(p, _)| p.as_str()).collect();
+        eprintln!(
+            "agentmeter: asking Claude Code for /context in {} ({})…",
+            if places.len() == 1 {
+                "1 place".to_owned()
+            } else {
+                format!("{} places", places.len())
+            },
+            names.join(", ")
+        );
+    }
+    agentmeter_claude::probe::run(&places)
 }
 
 fn run(options: &Options, interactive: bool) -> ExitCode {
@@ -148,9 +225,19 @@ fn run(options: &Options, interactive: bool) -> ExitCode {
     }
     let period = period_label(options.since, now_ms);
 
+    let since_ms = options.since.map(|s| s.start_ms(now_ms));
     let analyses: Vec<Analysis> = sources
         .iter_mut()
-        .map(|s| analyse(s, options, now_ms))
+        .map(|s| {
+            // The project filter applies before the analysis and before the probe chooses its
+            // projects.
+            if let Some(name) = &options.project {
+                s.dataset.retain_project(name);
+            }
+            let probe = (options.probe && s.tool == "claude")
+                .then(|| run_probe(s, since_ms, io::stderr().is_terminal()));
+            analyse(s, options, now_ms, probe)
+        })
         .collect();
     if let Some(name) = &options.project
         && sources.iter().all(|s| s.dataset.requests.is_empty())
@@ -169,11 +256,13 @@ fn run(options: &Options, interactive: bool) -> ExitCode {
             label: source.label,
             period: period.clone(),
             project: options.project.as_deref(),
+            places: &source.places,
             quality: &a.quality,
             summary: a.summary.as_ref(),
             sessions: a.sessions.as_deref(),
             projects: a.projects.as_deref(),
             findings: a.findings.as_ref(),
+            probe: a.probe.as_ref(),
         })
         .collect();
     if options.json {

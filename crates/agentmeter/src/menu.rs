@@ -6,8 +6,9 @@
 
 use crate::cli::{Options, Since, Tool};
 use crate::render::{self, Report, Style};
-use crate::{Analysis, Source, analyse, period_label};
+use crate::{Analysis, Source, analyse, period_label, run_probe};
 use agentmeter_core::format::{count, tokens};
+use agentmeter_core::model::Probe;
 use runemark::{ColorMode, Console, ErrorBlock, Group, Hint, Item, Menu, Outcome, SelectMode};
 use std::io::{self, BufRead, Write};
 use std::process::ExitCode;
@@ -150,7 +151,7 @@ pub fn model(views: &[View]) -> Vec<Section> {
             }),
         ),
     ];
-    let findings = RULES
+    let mut findings: Vec<Row> = RULES
         .iter()
         .map(|rule| {
             row(
@@ -167,6 +168,16 @@ pub fn model(views: &[View]) -> Vec<Section> {
             )
         })
         .collect();
+    if let Some(claude) = views.iter().find(|v| v.source.tool == "claude") {
+        findings.push(row(
+            "probe",
+            "Context probe",
+            match claude.analysis.probe.as_ref().and_then(|p| p.baseline()) {
+                Some(base) => format!("configuration {} at session start", tokens(base.total)),
+                None => "ask Claude Code /context (runs claude locally, no request)".to_owned(),
+            },
+        ));
+    }
     let data = views
         .iter()
         .map(|v| {
@@ -217,11 +228,13 @@ fn detail(id: &str, views: &[View], period: &str, style: Style) -> String {
                 label: v.source.label,
                 period: period.to_owned(),
                 project: None,
+                places: &v.source.places,
                 quality: &a.quality,
                 summary: a.summary.as_ref().filter(|_| id == "summary"),
                 sessions: a.sessions.as_deref().filter(|_| id == "sessions"),
                 projects: a.projects.as_deref().filter(|_| id == "projects"),
                 findings: a.findings.as_ref().filter(|_| id.starts_with("rule:")),
+                probe: a.probe.as_ref().filter(|_| id.starts_with("rule:")),
             };
             render::text(&report, style)
         })
@@ -272,6 +285,9 @@ pub fn run(mut sources: Vec<Source>, now_ms: i64) -> ExitCode {
     let console = Console::stderr(ColorMode::Auto);
     let choices = source_choices(&sources);
     let (mut choice, mut period) = (0usize, Period::Days7);
+    // The probe runs once when chosen; its answer then goes into every analysis.
+    let mut probe: Option<Probe> = None;
+    let mut show: Option<String> = None;
     let style = Style {
         color: std::env::var_os("NO_COLOR").is_none_or(|v| v.is_empty()),
     };
@@ -291,7 +307,10 @@ pub fn run(mut sources: Vec<Source>, now_ms: i64) -> ExitCode {
         let analyses: Vec<Analysis> = sources
             .iter_mut()
             .filter(|s| chosen(s))
-            .map(|s| analyse(s, &options, now_ms))
+            .map(|s| {
+                let probe = probe.clone().filter(|_| s.tool == "claude");
+                analyse(s, &options, now_ms, probe)
+            })
             .collect();
         let views: Vec<View> = sources
             .iter()
@@ -306,7 +325,21 @@ pub fn run(mut sources: Vec<Source>, now_ms: i64) -> ExitCode {
             format!("{} · {period_words}", labels.join(" · ")),
         );
 
+        if let Some(id) = show.take() {
+            print!("{}", detail(&id, &views, &period_words, style));
+            eprint!("\nPress Enter to return to the menu. ");
+            let _ = io::stderr().flush();
+            let mut line = String::new();
+            let _ = io::stdin().lock().read_line(&mut line);
+        }
         match menu.run(console, SelectMode::Always, true) {
+            Ok(Outcome::Selected(id)) if id == "probe" => {
+                if let Some(claude) = sources.iter().find(|s| s.tool == "claude") {
+                    let since_ms = period.since().map(|s| s.start_ms(now_ms));
+                    probe = Some(run_probe(claude, since_ms, true));
+                }
+                show = Some("rule:baseline-load".to_owned());
+            }
             Ok(Outcome::Selected(id)) => {
                 print!("{}", detail(&id, &views, &period_words, style));
                 eprint!("\nPress Enter to return to the menu. ");
@@ -364,7 +397,7 @@ mod tests {
         };
         let analyses = sources
             .iter_mut()
-            .map(|s| analyse(s, &options, 0))
+            .map(|s| analyse(s, &options, 0, None))
             .collect();
         (sources, analyses)
     }
@@ -378,7 +411,7 @@ mod tests {
     }
 
     #[test]
-    fn model_has_overview_one_row_per_rule_and_a_data_row_per_source() {
+    fn model_has_overview_one_row_per_rule_a_probe_row_and_a_data_row_per_source() {
         let (sources, analyses) = analysed(vec![source("claude", "Claude Code", "epoch-current")]);
         let model = model(&views(&sources, &analyses));
         let titles: Vec<_> = model.iter().map(|s| s.title).collect();
@@ -386,8 +419,11 @@ mod tests {
         assert_eq!(model[0].rows[0].id, "summary");
         assert!(model[0].rows[0].description.starts_with("4 requests"));
         let ids: Vec<_> = model[1].rows.iter().map(|r| r.id.as_str()).collect();
-        assert_eq!(ids.len(), 5);
+        assert_eq!(ids.len(), 6);
         assert!(ids.contains(&"rule:cache-rebuild"));
+        // Claude Code can be asked for /context; the row says it runs claude.
+        assert_eq!(ids.last(), Some(&"probe"));
+        assert!(model[1].rows[5].description.contains("runs claude"));
         let thrash = model[1]
             .rows
             .iter()

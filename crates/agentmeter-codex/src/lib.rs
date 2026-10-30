@@ -203,6 +203,9 @@ struct FileFacts {
     foreign_meta: bool,
     forked: bool,
     first_is_meta: Option<bool>,
+    /// `originator` and `cwd` of the first `session_meta`.
+    entrypoint: Option<String>,
+    cwd: Option<String>,
     model: String,
     previous: Totals,
     last_context: u64,
@@ -323,6 +326,8 @@ impl Reader {
                 source,
                 clean: reason.is_none(),
                 reason,
+                entrypoint: facts.entrypoint.take(),
+                cwd: facts.cwd.take(),
             });
         }
     }
@@ -342,6 +347,8 @@ impl Reader {
             if let Some(name) = meta.cwd.as_deref().and_then(project_name) {
                 facts.project = name;
             }
+            facts.entrypoint = meta.originator.filter(|o| !o.is_empty());
+            facts.cwd = meta.cwd.filter(|c| !c.is_empty());
             // Shown only; Resume rewrites it, so it never selects behaviour.
             if let Some(version) = meta.cli_version.as_deref() {
                 self.stats.note_version(version);

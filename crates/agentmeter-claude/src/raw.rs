@@ -23,6 +23,10 @@ pub struct RawLine<'a> {
     pub parent_uuid: Option<String>,
     #[serde(default)]
     pub version: Option<String>,
+    #[serde(default)]
+    pub entrypoint: Option<String>,
+    #[serde(default)]
+    pub cwd: Option<String>,
     /// Kept unparsed; message content is never looked at, and only assistant lines are opened.
     #[serde(default, borrow)]
     pub message: Option<&'a RawValue>,

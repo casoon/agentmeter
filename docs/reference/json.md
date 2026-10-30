@@ -33,6 +33,7 @@ list under it names every field of that object. The tests compare these lists wi
 - `verdict` — only with `--findings`: `no_data` (nothing to analyse), `none` (every rule that could be measured found nothing) or `findings`.
 - `findings` — only with `--findings`: the diagnoses of the rules with status `observed`.
 - `rules` — only with `--findings`: the status of every rule, once each.
+- `probe` — only with `--probe` and only for `claude`: what Claude Code's `/context` reported.
 
 ### `sources[].data_quality`
 
@@ -135,7 +136,22 @@ list under it names every field of that object. The tests compare these lists wi
 - `evidence` — where to look.
 - `counterexamples` — known cases in which the observation is harmless.
 - `next_step` — what to check next.
+- `conclusion` — what the numbers mean.
+- `parts` — the measure split into its parts; may be empty.
 - `values` — more numbers, with keys specific to the rule.
+
+### `sources[].findings[].conclusion`
+
+- `kind` — `lever` (a setting or habit you control moves the number; weigh it), `look` (the log cannot decide; the evidence needs a look) or `fine` (nothing to do).
+- `text` — the conclusion in one or two sentences.
+
+### `sources[].findings[].parts[]`
+
+- `label` — what the part is.
+- `value` — its size.
+- `unit` — unit of `value`: `tokens` or `hours`.
+- `count` — how many events the part stands for, or `null`.
+- `count_unit` — what `count` counts (`rebuilds`, `requests`, `starts`), or `null`.
 
 ### `sources[].findings[].measure`
 
@@ -160,6 +176,30 @@ list under it names every field of that object. The tests compare these lists wi
 - `reason` — why it is not measurable; otherwise `null`.
 - `message` — what was measured, for `observed` and `checked_none`; otherwise `null`.
 - `measure` — the measure behind `message`, same fields as `findings[].measure`; otherwise `null`.
+
+### `sources[].probe`
+
+- `command` — the command that was run in each place.
+- `runs` — one entry per place that answered.
+- `failures` — one entry per place that did not, each with `place` and `reason` (`claude` not found, no answer within 90 s, an error answer, or a format the reader does not know).
+
+### `sources[].probe.runs[]`
+
+- `place` — `empty directory` (the configuration alone) or a project name.
+- `dir` — the directory it ran in.
+- `model` — the model `/context` names, or `null`.
+- `total` — tokens sent at session start: the sum of `sent`. An estimate by Claude Code, not a count from the log.
+- `sent` — categories sent with every request (system prompt, tools, memory files, skills, ...).
+- `deferred` — categories listed by name only and loaded on demand; not in `total`.
+- `memory_files` — memory files with their paths.
+- `mcp_servers` — MCP tool tokens summed per server.
+
+### `sources[].probe.runs[].sent[]`
+
+The entries of `deferred`, `memory_files` and `mcp_servers` have the same fields.
+
+- `label` — category, file path or server name.
+- `tokens` — tokens as `/context` estimates them.
 
 ## `--check data-quality`
 
