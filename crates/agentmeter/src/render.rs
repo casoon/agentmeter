@@ -323,10 +323,9 @@ fn spread_text(f: &Finding, style: Style) -> String {
     cells[at(median)] = '┃';
     let line: String = cells.into_iter().collect();
     format!(
-        "    {:<LABEL$} {}\n    {:<LABEL$} {}\n",
+        "    {:<LABEL$} {}\n      {}\n",
         "spread of session starts",
         style.tone(Tone::Info, &line),
-        "",
         style.dim(&format!(
             "smallest {} · quartiles {} / {} · median {} · largest {}",
             tokens(min),

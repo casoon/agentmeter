@@ -21,7 +21,7 @@ FINDINGS   ? 3 to look at   ✓ 1 fine   ✓ 1 nothing found
     instructions or MCP servers)
 
     spread of session starts                         ├──┃━━───────┤
-                                   smallest 68k · quartiles 76k / 87k · median 79k · largest 114k
+      smallest 68k · quartiles 76k / 87k · median 79k · largest 114k
     median start, split            ██████████████▓▓▓▓▓▓▓▓▓▓▓▓▓▓░░░░     79k
       █ configuration (/context, empty directory)                       34k
       ▓ rest of the smallest start                                      34k

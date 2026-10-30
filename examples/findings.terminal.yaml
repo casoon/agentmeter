@@ -1,58 +1,187 @@
-# Recorded with `castwright build --allow-exec --record` from `agentmeter --tool claude --findings`
-# with CLAUDE_CONFIG_DIR pointing at sample-logs/, a copy of tests/fixtures/epoch-current (synthetic logs).
-# SVG export: `castwright build findings.terminal.yaml --format svg --loop-delay 11000` (final frame held 11 s).
+# Recorded with `castwright build findings.terminal.yaml --allow-exec --record` (castwright 0.5.2),
+# run in examples/ with CLAUDE_CONFIG_DIR=demo-logs (synthetic logs, written for this demo) and
+# tests/fixtures/probe/claude on the PATH as `claude` (a recorded, shortened /context answer).
+# SVG export: `castwright build findings.terminal.yaml --format svg -o ../.github/readme --loop-delay 4000`
+# The closing `wait` holds the finished screen, the loop delay adds to it.
 version: 1
 
 terminal:
   title: agentmeter
-  cols: 110
-  rows: 32
+  cols: 92
+  rows: 92
   theme: catppuccin-mocha
 
 steps:
   - wait: 500
-  - run: agentmeter --tool claude --findings
-  - wait: 600
+  - run: agentmeter --tool claude --findings --probe
   - output:
-      raw: "\e[1magentmeter\e[0m · Claude Code · all logs
+      raw: "agentmeter: asking Claude Code for /context in 1 place (empty directory)…
+
+        \e[1magentmeter\e[0m · Claude Code · all logs
 
 
-        \e[1mFINDINGS\e[0m
+        \e[1;96mREAD\e[0m
 
-        \  \e[36mi\e[0m \e[1mcache-rebuild v1\e[0m \e[2minfo · observed\e[0m
+        \  \e[1;92m✓\e[0m logs      6 files, 72 lines from demo-logs/projects · version 2.1.309
 
-        \    1 of 1 pauses over 5 min were followed by a cache write of 100k+ (120k tokens); of these 1 expected (model change or compaction), 0 gap over 1 h, 0 5 min cache likely expired, 0 cause unknown
+        \  \e[1;92m✓\e[0m observed  2026-10-28T09:00:05Z – 2026-10-28T14:22:05Z · 36 requests in all
 
-        \e[2m    measure: pauses over 5 min followed by a cache write of 100k+ = 1 rebuilds of 1 pauses over 5 min (sample 2 log files)
+        \  \e[1;92m✓\e[0m quality   every line readable
 
-        \e[0m\e[2m    evidence: demo-app/sess-main.jsonl · msg_M3
+        \  \e[1;92m✓\e[0m rules     5 of 5 measurable in this source
 
-        \e[0m\e[2m    but: a pause is part of the work; the rebuild after it is expected, not avoidable by itself
+        \  \e[1;92m✓\e[0m probe     /context in 1 of 1 places (empty directory); answered locally, no model
 
-        \e[0m\e[2m    but: an edited memory file, a changed tool list or a split cache prefix also rewrites the cache
+        \              request · claude -p /context --no-session-persistence --output-format json
 
-        \e[0m\e[2m    but: the cache lifetime of the earlier writes is only known if the file shows them
 
-        \e[0m    \e[1mnext:\e[0m check in the evidence files whether the pause matches your work; if 5 min pauses dominate, the 1 h cache (promptCacheTtl) may reduce rewrites, but its writes cost more, so compare before switching
+        \e[1;96mFINDINGS\e[0m   \e[1;93m◆ 1 lever\e[0m   \e[36m? 1 to look at\e[0m   \e[1;92m✓ 3 nothing found\e[0m
 
-        \e[2m  baseline-load v1 not measurable: only 1 clean session starts (5 needed); 0 resumed or forked, 0 without log start
+        \e[2m────────────────────────────────────────────────────────────────────────────────────────
 
-        \e[0m\e[2m  compact-thrash v1 checked, nothing to report: no automatic compaction pair in the period
+        \e[0m
 
-        \e[0m\e[2m  big-context v2 checked, nothing to report: 0 of 4 requests above 500k (0.0 % of tokens, below 10 %); largest context 120k
+        \e[1;93m◆ cache-rebuild\e[0m                                             \e[2mlever · info · observed · v1\e[0m
 
-        \e[0m\e[2m  long-session v1 checked, nothing to report: 0 of 1 sessions span more than 24 h (longest 0.5 h)
+        \  ⇒ \e[1ma 1 h cache lifetime for the main conversation (promptCacheTtl) would have
 
-        \e[0m\e[2m
+        \    turned 6 rebuilds into cache reads: about 1.4 M saved against 410k more for
 
-        Data: observed 2026-10-28T12:00:05Z – 2026-10-28T12:30:00Z
+        \    longer-lived writes, net 964k input-token equivalents (39.4 % of this period's input
 
-        \  Read 2 files, 10 lines, 4 requests · version 2.1.309
+        \    cost)\e[0m
 
-        \e[0m\e[2m  0 duplicate lines merged, 1 sub-agent replays dropped\e[0m
 
-        \e[2m  unknown entry types: future-event (1)\e[0m
+        \    pause over 1 h                 \e[1;93m\e[0m\e[2m························\e[0m       0\e[2m  0 rebuilds\e[0m
 
-        \e[2m  unknown usage fields: new_counter (1)\e[0m\n"
-    delay: 0
-  - wait: 11000
+        \    5 min expired, main session    \e[1;93m████████████████████████\e[0m\e[2m\e[0m   1.2 M\e[2m  6 rebuilds\e[0m
+
+        \    5 min expired, sub-agents      \e[1;93m\e[0m\e[2m························\e[0m       0\e[2m  0 rebuilds\e[0m
+
+        \    cause unknown                  \e[1;93m\e[0m\e[2m························\e[0m       0\e[2m  0 rebuilds\e[0m
+
+        \    expected (model, compaction)   \e[1;93m\e[0m\e[2m························\e[0m       0\e[2m  0 rebuilds\e[0m
+
+        \    1 h lifetime, estimate         \e[2msaves 1.4 M · costs 410k more · net +964k\e[0m
+
+
+        \    measured  6 of 6 pauses over 5 min were followed by a cache write of 100k+ (1.2 M
+
+        \              tokens); of these 0 expected (model change or compaction), 0 gap over 1 h,
+
+        \              6 5 min cache likely expired, 0 cause unknown
+
+        \              \e[2mpauses over 5 min followed by a cache write of 100k+ = 6 rebuilds of 6
+
+        \              pauses over 5 min (sample 6 log files)\e[0m
+
+        \e[2m    evidence  -Users-me-GitHub-demo-app/demo-1.jsonl · msg_demo-1_10
+
+        \e[0m\e[2m    evidence  -Users-me-GitHub-demo-app/demo-2.jsonl · msg_demo-2_10
+
+        \e[0m\e[2m    evidence  -Users-me-GitHub-demo-app/demo-3.jsonl · msg_demo-3_10
+
+        \e[0m\e[2m    but       \e[0m\e[2ma pause is part of the work; the rebuild after it is expected, not
+
+        \              avoidable by itself\e[0m
+
+        \e[2m    but       \e[0m\e[2man edited memory file, a changed tool list or a split cache prefix
+
+        \              also rewrites the cache\e[0m
+
+        \e[2m    but       \e[0m\e[2mthe cache lifetime of the earlier writes is only known if the file
+
+        \              shows them\e[0m
+
+        \e[2m    but       \e[0m\e[2mthe 1 h estimate replays this period with list-price ratios for the
+
+        \              main conversation only; another work pattern gives another result\e[0m
+
+        \    \e[1mnext\e[0m      check in the evidence files whether the pauses match your work; a
+
+        \              sub-agent file that pauses for minutes usually waits on a long tool run
+
+
+        \e[36m? baseline-load\e[0m                                      \e[2mlook at it · notice · observed · v1\e[0m
+
+        \  ⇒ \e[1mtoday's configuration is 33k of the median start 81k (41 %); 39k more is in
+
+        \    every start (front end, project instructions, a short first prompt) and 9k varies
+
+        \    per session; 6 of 6 starts came from claude-desktop, whose own instructions and
+
+        \    tools /context in the CLI does not see\e[0m
+
+
+        \    spread of session starts       \e[36m                         ├─━━┃━┤\e[0m
+
+        \      \e[2msmallest 72k · quartiles 76k / 84k · median 81k · largest 88k\e[0m
+
+        \    median start, split            \e[1;93m█████████████\e[0m\e[36m▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓\e[0m\e[2m░░░░\e[0m     81k
+
+        \      \e[1;93m█\e[0m configuration (/context, empty directory)                       33k
+
+        \      \e[36m▓\e[0m rest of the smallest start                                      39k
+
+        \      \e[2m░\e[0m varies per session (median minus smallest)                       9k
+
+
+        \    \e[1mtoday's configuration, /context in an empty directory · claude-test\e[0m
+
+        \    System tools                   \e[1;93m████████████████████████\e[0m\e[2m\e[0m     19k
+
+        \    Skills                         \e[1;93m████████████▌\e[0m\e[2m···········\e[0m     10k
+
+        \    System prompt                  \e[1;93m███▊\e[0m\e[2m····················\e[0m      3k
+
+        \    Memory files                   \e[1;93m█▊\e[0m\e[2m······················\e[0m      1k
+
+        \    \e[2mloaded on demand, not sent at start: MCP tools (deferred) 12k\e[0m
+
+        \    MCP servers: docs 1k
+
+        \    memory files: ~/.claude/CLAUDE.md 1k
+
+
+        \    measured  initial context of 6 clean session starts: median 81k (quartiles 76k /
+
+        \              84k); not counted: 0 resumed or forked, 0 without log start
+
+        \              \e[2mmedian initial context = 81020 tokens of 6 session starts in the
+
+        \              period (sample 6 clean session starts)\e[0m
+
+        \e[2m    evidence  -Users-me-GitHub-demo-app/demo-6.jsonl · msg_demo-6_2
+
+        \e[0m\e[2m    evidence  -Users-me-GitHub-demo-app/demo-5.jsonl · msg_demo-5_2
+
+        \e[0m\e[2m    evidence  -Users-me-GitHub-demo-app/demo-4.jsonl · msg_demo-4_2
+
+        \e[0m\e[2m    but       \e[0m\e[2mthe first request also contains your first prompt and attachments\e[0m
+
+        \e[2m    but       \e[0m\e[2ma session started from another directory or with a large first task
+
+        \              starts larger\e[0m
+
+        \e[2m    but       \e[0m\e[2mthe probe measures today's configuration; the period may have run with
+
+        \              another\e[0m
+
+        \    \e[1mnext\e[0m      compare the largest configuration parts with what you use; in Claude Code,
+
+        \              /context in a session lists every tool, skill and memory file
+
+
+        \e[1;92m✓\e[0m compact-thrash  \e[2mnothing to report: no automatic compaction pair in the period
+
+        \                  (v1)\e[0m
+
+        \e[1;92m✓\e[0m big-context     \e[2mnothing to report: 0 of 36 requests above 500k (0.0 % of tokens,
+
+        \                  below 10 %); largest context 209k (v2)\e[0m
+
+        \e[1;92m✓\e[0m long-session    \e[2mnothing to report: 0 of 6 sessions span more than 24 h (longest
+
+        \                  0.4 h) (v1)\e[0m\n"
+    delay: 3
+  - wait: 12000
