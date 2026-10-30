@@ -4,8 +4,8 @@ Explains coding-agent usage. agentmeter reads the session logs that **Claude Cod
 writes to your disk, and the ones **Codex CLI** writes, and reports observations from your own
 usage, each with the evidence behind it, how sure it is and one concrete thing to check next.
 
-> **Status:** early development, no versioned release yet. Output, JSON shape and rule
-> definitions may change.
+> **Status:** early development (0.x). Output, JSON shape and rule definitions may change
+> between minor versions; the changelog lists every change.
 
 <p align="center">
   <img src=".github/readme/demo.svg" alt="Terminal recording of agentmeter --tool claude --findings --probe: a status block of what was read, then a cache-rebuild finding marked as a lever with its breakdown bars and the 1 h estimate, a baseline-load finding that splits the median session start into configuration and the rest, and the rules that found nothing. The logs are small synthetic sample data, not real usage." width="900">
@@ -16,10 +16,25 @@ usage, each with the evidence behind it, how sure it is and one concrete thing t
 ## Install
 
 ```sh
-cargo install --git https://github.com/casoon/agentmeter agentmeter
+cargo install agentmeter
 ```
 
-Needs Rust 1.88 or newer. Run `agentmeter` in a terminal: it opens a menu with the summary,
+Needs Rust 1.88 or newer. Prebuilt binaries for macOS (Apple silicon, Intel) and Linux (x86_64,
+arm64, static) are on the [releases page](https://github.com/casoon/agentmeter/releases).
+
+Official binaries come only from the GitHub releases of `casoon/agentmeter`, built there by the
+release workflow, never on a developer machine. To verify a download by hand, check the hash and
+the signed build provenance:
+
+```sh
+shasum -a 256 -c agentmeter-<version>-<target>.tar.gz.sha256
+gh attestation verify agentmeter-<version>-<target>.tar.gz --repo casoon/agentmeter
+```
+
+The binaries are built with `cargo auditable`, so `cargo audit bin agentmeter` can check a
+downloaded one for known vulnerabilities.
+
+Run `agentmeter` in a terminal: it opens a menu with the summary,
 sessions, projects, one row per rule and the data quality per source. `S` switches the source,
 `P` the period, `/` searches.
 

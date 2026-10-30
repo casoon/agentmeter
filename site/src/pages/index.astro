@@ -37,20 +37,20 @@ agentmeter --check data-quality # exit 1 on unreadable or missing data`;
 <Base>
   <Hero
     title="See where your agent tokens go."
-    lead="agentmeter reads the session logs Claude Code and Codex already write to your disk and explains your usage: context size, cache rebuilds, session length, the size of the first request. Each number comes with its evidence and what it does not prove. Read-only, local, no network."
+    lead="agentmeter reads the session logs Claude Code and Codex already write to your disk and explains your usage: context size, cache rebuilds, session length, the size of the first request. Each number comes with its evidence and what it does not prove. Read-only, local, no network; only --probe starts another program, Claude Code itself."
   >
     <Install
       commands={[
         {
           label: 'cargo',
-          command: 'cargo install --git https://github.com/casoon/agentmeter agentmeter',
+          command: 'cargo install agentmeter',
         },
       ]}
     />
     <Badges>
       <Badge>MIT</Badge>
       <Badge>Rust</Badge>
-      <Badge>Early development — not released</Badge>
+      <Badge>Early development — 0.x</Badge>
     </Badges>
     <Terminal slot="output" title="agentmeter --findings" dots ansi={findings} />
   </Hero>
@@ -116,7 +116,7 @@ agentmeter --check data-quality # exit 1 on unreadable or missing data`;
   <Quickstart
     lead="Install it, run it. On a terminal it opens a menu; with a flag or in a pipe it prints text."
     steps={[
-      'Install with <code>cargo install --git https://github.com/casoon/agentmeter agentmeter</code>.',
+      'Install with <code>cargo install agentmeter</code>, or take a binary from the GitHub releases.',
       'Run <code>agentmeter</code> and open a row, or name a view: <code>agentmeter --findings</code>.',
       'Narrow it with <code>--tool codex</code>, <code>--since 7d</code> or <code>--project &lt;name&gt;</code>.',
     ]}
@@ -140,7 +140,7 @@ agentmeter --check data-quality # exit 1 on unreadable or missing data`;
       },
       {
         q: 'Is it released?',
-        a: 'Not as a versioned release yet. Install it from the repository with cargo; the changelog lists what works.',
+        a: 'Yes, as 0.x: on crates.io and as signed binaries for macOS and Linux on the GitHub releases. Output and JSON may still change between minor versions; the changelog lists every change.',
       },
     ]}
   />

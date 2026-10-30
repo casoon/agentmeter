@@ -13,6 +13,9 @@ edition = "2024"
 rust-version = "1.88"
 license = "MIT"
 repository = "https://github.com/casoon/agentmeter"
+homepage = "https://casoon.github.io/agentmeter/"
+keywords = ["claude-code", "codex", "tokens", "usage", "cli"]
+categories = ["command-line-utilities", "development-tools"]
 description = "Diagnosis for coding-agent usage: findings with tips from local session logs"
 
 [workspace.dependencies]
