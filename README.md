@@ -19,7 +19,7 @@ usage, each with the evidence behind it, how sure it is and one concrete thing t
 cargo install --git https://github.com/casoon/agentmeter agentmeter
 ```
 
-Needs Rust 1.85 or newer. Run `agentmeter` in a terminal: it opens a menu with the summary,
+Needs Rust 1.88 or newer. Run `agentmeter` in a terminal: it opens a menu with the summary,
 sessions, projects, one row per rule and the data quality per source. `S` switches the source,
 `P` the period, `/` searches.
 
