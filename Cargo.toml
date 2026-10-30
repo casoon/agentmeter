@@ -1,0 +1,30 @@
+[workspace]
+members = [
+    "crates/agentmeter",
+    "crates/agentmeter-core",
+    "crates/agentmeter-claude",
+    "crates/agentmeter-codex",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT"
+repository = "https://github.com/casoon/agentmeter"
+description = "Diagnosis for coding-agent usage: findings with tips from local session logs"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["raw_value"] }
+runemark = { version = "0.9.1", features = ["select"] }
+ruzstd = { version = "0.9.1", default-features = false, features = ["std"] }
+agentmeter-core = { version = "0.1.0", path = "crates/agentmeter-core" }
+agentmeter-codex = { version = "0.1.0", path = "crates/agentmeter-codex" }
+agentmeter-claude = { version = "0.1.0", path = "crates/agentmeter-claude" }
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true

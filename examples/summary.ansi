@@ -1,0 +1,9 @@
+[1magentmeter[0m  Claude Code   last 7 days
+
+requests       [1m30,590[0m      sessions   [1m135[0m
+input          [1m7.9 G[0m tokens  cache read [32m98 %[0m
+output         [1m23.0 M[0m tokens
+compactions    [1m30[0m  (auto 30, manual 0)
+
+[2mprojects by input[0m
+  chartlet   21 %    kestrel   17 %    web-casoon-dev   13 %

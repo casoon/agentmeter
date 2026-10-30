@@ -1,0 +1,147 @@
+---
+import { readFile } from 'node:fs/promises';
+import config from 'virtual:casoon-pages/config';
+import {
+  AnchorGrid,
+  Badge,
+  Badges,
+  BuildOutput,
+  Faq,
+  Features,
+  Hero,
+  Install,
+  Quickstart,
+  CodeBlock,
+  ReleaseHighlights,
+  Terminal,
+} from '@casoon/pages-theme/components';
+import Base from '@casoon/pages-theme/layouts/Base.astro';
+import { parseChangelog } from '@casoon/pages-theme/lib/changelog';
+import { url } from '@casoon/pages-theme/url';
+import findings from '../../../examples/findings.ansi?raw';
+import summary from '../../../examples/summary.ansi?raw';
+
+// Skip "Unreleased": it has no version to show as "New in v…" yet.
+const latestRelease = config.changelog
+  ? parseChangelog(await readFile(config.changelog, 'utf8')).find(
+      (r) => r.version.toLowerCase() !== 'unreleased'
+    )
+  : undefined;
+const usage = `agentmeter                      # menu on a terminal
+agentmeter --findings           # rules with measure, evidence and next step
+agentmeter --tool codex --since 7d
+agentmeter --json               # the same data, one entry per source
+agentmeter --check data-quality # exit 1 on unreadable or missing data`;
+---
+
+<Base>
+  <Hero
+    title="See where your agent tokens go."
+    lead="agentmeter reads the session logs Claude Code and Codex already write to your disk and explains your usage: context size, cache rebuilds, session length, the size of the first request. Each number comes with its evidence and what it does not prove. Read-only, local, no network."
+  >
+    <Install
+      commands={[
+        {
+          label: 'cargo',
+          command: 'cargo install --git https://github.com/casoon/agentmeter agentmeter',
+        },
+      ]}
+    />
+    <Badges>
+      <Badge>MIT</Badge>
+      <Badge>Rust</Badge>
+      <Badge>Early development — not released</Badge>
+    </Badges>
+    <Terminal slot="output" title="agentmeter --findings" dots ansi={findings} />
+  </Hero>
+
+  <AnchorGrid
+    items={[
+      {
+        label: 'Diagnosis',
+        title: 'Evidence, not verdicts',
+        body: 'Every rule reports a number from your own logs, its sample size and what it does not prove. The catalogue is documented.',
+        href: url('docs/reference/findings/'),
+        tone: 'accent',
+      },
+      {
+        label: 'Sources',
+        title: 'Claude Code and Codex',
+        body: 'Which fields are read from which log, and where the formats are not official.',
+        href: url('docs/reference/log-formats/'),
+        tone: 'accent',
+      },
+      {
+        label: 'Privacy',
+        title: 'Usage fields only',
+        body: 'No prompts, no file contents, no network access. Only token counts, timestamps, model and session ids.',
+        href: url('docs/'),
+        tone: 'brand',
+      },
+    ]}
+  />
+
+  <Features
+    items={[
+      {
+        title: 'Context, not only cost',
+        body: 'A high cache share hides large contexts: every request rereads them. agentmeter shows how much of your input comes from requests above 500k.',
+      },
+      {
+        title: 'First-request size',
+        body: 'How large a session already is before you type anything. Growth over time points at configuration, but the logs cannot say which part.',
+      },
+      {
+        title: 'Cache rebuilds',
+        body: 'Large cache writes after a pause, with the cause marked unknown when the logs do not show it.',
+      },
+      {
+        title: 'Data gaps stated',
+        body: 'Observed period, files without usage, unreadable entries and rules a source cannot support are listed, so "no findings" never hides "no data".',
+      },
+    ]}
+  />
+
+  <div id="build-output">
+    <BuildOutput
+      caption="Summary view with figures from one author's Claude Code logs over seven days. The tool is in early development."
+      file="examples/summary.ansi"
+    >
+      <Terminal ansi={summary} />
+    </BuildOutput>
+  </div>
+
+  {latestRelease && <ReleaseHighlights release={latestRelease} />}
+
+  <Quickstart
+    lead="Install it, run it. On a terminal it opens a menu; with a flag or in a pipe it prints text."
+    steps={[
+      'Install with <code>cargo install --git https://github.com/casoon/agentmeter agentmeter</code>.',
+      'Run <code>agentmeter</code> and open a row, or name a view: <code>agentmeter --findings</code>.',
+      'Narrow it with <code>--tool codex</code>, <code>--since 7d</code> or <code>--project &lt;name&gt;</code>.',
+    ]}
+  >
+    <CodeBlock code={usage} lang="sh" label="Usage" />
+  </Quickstart>
+
+  <Faq
+    items={[
+      {
+        q: 'How is this different from tools like ccusage?',
+        a: 'Existing tools aggregate tokens and cost. agentmeter derives hints from the same logs and states how sure each one is. Claude Code has its own /usage recommendations; agentmeter adds a view across sessions and across Claude Code and Codex, and shows data gaps.',
+      },
+      {
+        q: 'Which agents are supported?',
+        a: 'Claude Code and Codex CLI are the targets. Other agents are possible later because every source is its own adapter.',
+      },
+      {
+        q: 'Can it show my remaining subscription quota?',
+        a: 'No. Subscription limits are not stored locally, so agentmeter cannot know how much of a quota is left.',
+      },
+      {
+        q: 'Is it released?',
+        a: 'Not as a versioned release yet. Install it from the repository with cargo; the changelog lists what works.',
+      },
+    ]}
+  />
+</Base>

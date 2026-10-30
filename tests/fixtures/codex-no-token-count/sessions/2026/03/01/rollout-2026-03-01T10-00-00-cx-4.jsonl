@@ -1,0 +1,2 @@
+{"timestamp":"2026-03-01T10:00:00.000Z","ordinal":20,"type":"session_meta","payload":{"id":"cx-4","cli_version":"0.116.0","cwd":"/work/demo-code","thread_source":"user","source":"cli"}}
+{"timestamp":"2026-03-01T10:00:01.000Z","ordinal":21,"type":"response_item","payload":{"type":"message","role":"user","content":[]}}

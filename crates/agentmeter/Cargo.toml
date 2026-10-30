@@ -1,0 +1,16 @@
+[package]
+name = "agentmeter"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description.workspace = true
+
+[dependencies]
+agentmeter-core.workspace = true
+agentmeter-claude.workspace = true
+agentmeter-codex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+runemark.workspace = true

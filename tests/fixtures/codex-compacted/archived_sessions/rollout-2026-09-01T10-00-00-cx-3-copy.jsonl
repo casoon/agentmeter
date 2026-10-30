@@ -1,0 +1,2 @@
+{"timestamp":"2026-09-01T10:00:00.000Z","ordinal":18,"type":"session_meta","payload":{"id":"cx-3","cli_version":"0.155.0","cwd":"/work/demo-code","thread_source":"user","source":"cli"}}
+{"timestamp":"2026-09-01T10:05:00.000Z","ordinal":19,"type":"compacted","payload":{"compaction_response_id":"cr-1","window_number":2,"message":"x"}}

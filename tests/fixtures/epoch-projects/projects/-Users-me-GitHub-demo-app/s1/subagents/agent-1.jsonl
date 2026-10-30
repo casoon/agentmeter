@@ -1,0 +1,1 @@
+{"type":"assistant","uuid":"a-m2","parentUuid":null,"sessionId":"s1","timestamp":"2026-10-28T10:01:00.000Z","version":"2.1.309","cwd":"/work/agent-abc123","isSidechain":true,"requestId":"req_m2","message":{"id":"m2","model":"m","content":[],"usage":{"input_tokens":1,"output_tokens":1,"cache_read_input_tokens":10,"cache_creation_input_tokens":0}}}
