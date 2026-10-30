@@ -1,5 +1,5 @@
-# Recorded with `castwright build --allow-exec --record` from `agentmeter --findings`, run in a
-# folder holding sample-logs/, a copy of tests/fixtures/epoch-current (synthetic Claude Code logs).
+# Recorded with `castwright build --allow-exec --record` from `agentmeter --tool claude --findings`
+# with CLAUDE_CONFIG_DIR pointing at sample-logs/, a copy of tests/fixtures/epoch-current (synthetic logs).
 version: 1
 
 terminal:
