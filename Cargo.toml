@@ -8,7 +8,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 rust-version = "1.88"
 license = "MIT"
@@ -23,9 +23,9 @@ serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
 runemark = { version = "0.9.1", features = ["select"] }
 ruzstd = { version = "0.9.1", default-features = false, features = ["std"] }
-agentmeter-core = { version = "0.1.0", path = "crates/agentmeter-core" }
-agentmeter-codex = { version = "0.1.0", path = "crates/agentmeter-codex" }
-agentmeter-claude = { version = "0.1.0", path = "crates/agentmeter-claude" }
+agentmeter-core = { version = "0.1.1", path = "crates/agentmeter-core" }
+agentmeter-codex = { version = "0.1.1", path = "crates/agentmeter-codex" }
+agentmeter-claude = { version = "0.1.1", path = "crates/agentmeter-claude" }
 
 [profile.release]
 lto = true
