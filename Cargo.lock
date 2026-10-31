@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "agentmeter"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "agentmeter-claude",
  "agentmeter-codex",
@@ -17,7 +17,7 @@ dependencies = [
 
 [[package]]
 name = "agentmeter-claude"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "agentmeter-core",
  "serde",
@@ -26,7 +26,7 @@ dependencies = [
 
 [[package]]
 name = "agentmeter-codex"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "agentmeter-core",
  "ruzstd",
@@ -36,7 +36,7 @@ dependencies = [
 
 [[package]]
 name = "agentmeter-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "serde_json",
