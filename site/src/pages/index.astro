@@ -6,12 +6,13 @@ import {
   Badge,
   Badges,
   BuildOutput,
+  CallToAction,
+  CodeBlock,
   Faq,
   Features,
   Hero,
   Install,
   Quickstart,
-  CodeBlock,
   ReleaseHighlights,
   Terminal,
 } from '@casoon/pages-theme/components';
@@ -62,21 +63,18 @@ agentmeter --check data-quality # exit 1 on unreadable or missing data`;
         title: 'Evidence, not verdicts',
         body: 'Every rule reports a number from your own logs, its sample size and what it does not prove. The catalogue is documented.',
         href: url('docs/reference/findings/'),
-        tone: 'accent',
       },
       {
         label: 'Sources',
         title: 'Claude Code and Codex',
         body: 'Which fields are read from which log, and where the formats are not official.',
         href: url('docs/reference/log-formats/'),
-        tone: 'accent',
       },
       {
         label: 'Privacy',
         title: 'Usage fields only',
         body: 'No prompts, no file contents, no network access. Only token counts, timestamps, model and session ids.',
         href: url('docs/'),
-        tone: 'brand',
       },
     ]}
   />
@@ -143,5 +141,11 @@ agentmeter --check data-quality # exit 1 on unreadable or missing data`;
         a: 'Yes, as 0.x: on crates.io and as signed binaries for macOS and Linux on the GitHub releases. Output and JSON may still change between minor versions; the changelog lists every change.',
       },
     ]}
+  />
+
+  <CallToAction
+    title="Find out where your tokens go."
+    href={url('docs/')}
+    label="Read the documentation"
   />
 </Base>
