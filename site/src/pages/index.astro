@@ -28,6 +28,14 @@ const latestRelease = config.changelog
       (r) => r.version.toLowerCase() !== 'unreleased'
     )
   : undefined;
+
+// The hero shows the first finding only; the full output is 70+ lines and pushed the title
+// below the fold.
+const findingsLines = findings.split('\n');
+const heroFindings = findingsLines
+  .slice(0, findingsLines.findIndex((line) => line.includes("today's configuration, /context")))
+  .join('\n')
+  .trimEnd();
 const usage = `agentmeter                      # menu on a terminal
 agentmeter --findings           # rules with measure, evidence and next step
 agentmeter --tool codex --since 7d
@@ -53,7 +61,7 @@ agentmeter --check data-quality # exit 1 on unreadable or missing data`;
       <Badge>Rust</Badge>
       <Badge>Early development — 0.x</Badge>
     </Badges>
-    <Terminal slot="output" title="agentmeter --findings" dots ansi={findings} />
+    <Terminal slot="output" title="agentmeter --findings" dots ansi={heroFindings} />
   </Hero>
 
   <AnchorGrid
