@@ -65,6 +65,10 @@ pub struct Options {
     pub subagents: bool,
     /// Called and uncalled skills with their share of the session-start skill list.
     pub skills: bool,
+    /// Compactions by project, model and session, with hints at what sets them off.
+    pub compaction_causes: bool,
+    /// Also read today's auto-compact settings files; implies `compaction_causes`.
+    pub compaction_settings: bool,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -121,6 +125,11 @@ where
             },
             "--subagents" => options.subagents = true,
             "--skills" => options.skills = true,
+            "--compaction-causes" => options.compaction_causes = true,
+            "--compaction-settings" => {
+                options.compaction_settings = true;
+                options.compaction_causes = true;
+            }
             "--probe" => {
                 options.probe = true;
                 options.findings = true;
@@ -182,7 +191,8 @@ where
         || options.transitions
         || options.compare.is_some()
         || options.subagents
-        || options.skills)
+        || options.skills
+        || options.compaction_causes)
     {
         options.summary = true;
     }
@@ -243,6 +253,18 @@ Options:
                          for the skill name of Skill calls and reads the SKILL.md headers (name
                          and description length) of user, plugin and project skills; no skill
                          content is kept. A skill started by hand with /name is not counted.
+      --compaction-causes
+                         Compactions by project, model and session: count, size before
+                         (min, quartiles, max), automatic/manual/unknown and rate per 1,000
+                         requests, with hints whether a size limit or the way of working is
+                         the lever. A correlation, never a cause. Metadata only.
+      --compaction-settings
+                         Also read today's auto-compact settings (autoCompactWindow, per model
+                         under modelSettings, autoCompactEnabled) from the Claude Code
+                         settings files of the user and of each project's working directory,
+                         and compare them with the sizes. Reads those files only; the setting
+                         is today's, never assigned to compactions of the past. Implies
+                         --compaction-causes.
       --json             Print JSON instead of text (schema: docs/reference/json.md)
       --check <name>     data-quality: exit 1 if a source has unreadable data or none to
                          analyse, 0 otherwise, 2 for a bad call. Findings never fail it.
@@ -388,6 +410,22 @@ mod tests {
             panic!("expected a run");
         };
         assert!(!options.skills);
+    }
+
+    #[test]
+    fn compaction_flags_are_opt_in_and_settings_imply_causes() {
+        let Invocation::Run(options) = run(&["--compaction-causes"]) else {
+            panic!("expected a run");
+        };
+        assert!(options.compaction_causes && !options.compaction_settings && !options.summary);
+        let Invocation::Run(options) = run(&["--compaction-settings"]) else {
+            panic!("expected a run");
+        };
+        assert!(options.compaction_causes && options.compaction_settings && !options.summary);
+        let Invocation::Run(options) = run(&[]) else {
+            panic!("expected a run");
+        };
+        assert!(!options.compaction_causes && !options.compaction_settings);
     }
 
     #[test]

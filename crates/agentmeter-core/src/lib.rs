@@ -4,6 +4,7 @@
 //! that and never touches a file.
 
 pub mod check;
+pub mod compaction;
 pub mod compare;
 pub mod findings;
 pub mod format;

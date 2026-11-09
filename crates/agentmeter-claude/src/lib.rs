@@ -10,6 +10,7 @@
 pub mod instructions;
 pub mod probe;
 mod raw;
+pub mod settings;
 pub mod skills;
 
 use agentmeter_core::model::{AgentLink, Compaction, Dataset, ReadStats, Request, SessionStart};

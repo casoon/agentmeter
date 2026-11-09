@@ -79,6 +79,7 @@ pub struct Report<'a> {
     pub compare: Option<&'a agentmeter_core::compare::Comparison>,
     pub subagents: Option<&'a agentmeter_core::subagents::SubagentReport>,
     pub skills: Option<&'a agentmeter_core::skills::SkillAnalysis>,
+    pub compaction_causes: Option<&'a agentmeter_core::compaction::CausesReport>,
 }
 
 /// Widest the text gets, also in a wider terminal or a pipe; bars are at most [`BAR`] cells.
@@ -209,6 +210,9 @@ pub fn text(report: &Report, style: Style) -> String {
     }
     if let Some(s) = report.subagents {
         out += &subagents_text(s, style);
+    }
+    if let Some(c) = report.compaction_causes {
+        out += &compaction_causes_text(c, style);
     }
     if let Some(tools) = report.tool_calls {
         out += &tool_calls_text(tools, style);
@@ -463,6 +467,34 @@ fn usage_line(u: &agentmeter_core::subagents::Usage) -> String {
     )
 }
 
+fn cause_group_line(g: &agentmeter_core::compaction::Group) -> String {
+    let before = g.tokens_before.as_ref().map_or("unknown".to_owned(), |s| {
+        format!(
+            "{} / {} / {} (min / median / max), quartiles {} and {}",
+            tokens(s.min),
+            tokens(s.median),
+            tokens(s.max),
+            tokens(s.q1),
+            tokens(s.q3)
+        )
+    });
+    format!(
+        "{} compactions · {} per 1,000 requests · {} automatic, {} manual, {} unknown trigger · before {}{}",
+        count(g.compactions),
+        g.per_1000_requests
+            .map_or("unknown".to_owned(), |r| r.to_string()),
+        count(g.triggers.auto),
+        count(g.triggers.manual),
+        count(g.triggers.unknown),
+        before,
+        if g.without_tokens_after > 0 {
+            format!(" · {} without size after", count(g.without_tokens_after))
+        } else {
+            String::new()
+        }
+    )
+}
+
 fn optional_count(value: Option<u64>) -> String {
     value.map_or("not measurable".to_owned(), count)
 }
@@ -677,6 +709,167 @@ fn subagents_text(r: &agentmeter_core::subagents::SubagentReport, style: Style) 
     for e in &r.counterexamples {
         out += &wrap(style, e, "  counter  ", "           ", 11);
     }
+    for n in &r.notes {
+        out += &wrap(style, n, "  note  ", "        ", 8);
+    }
+    out
+}
+
+fn compaction_causes_text(r: &agentmeter_core::compaction::CausesReport, style: Style) -> String {
+    let mut out = heading(style, "COMPACTION CAUSES");
+    out += &wrap(style, r.method, "  method     ", "             ", 13);
+    out += &wrap(
+        style,
+        &cause_group_line(&r.totals),
+        "  all        ",
+        "             ",
+        13,
+    );
+    for (title, rows) in [("PROJECTS", &r.projects), ("MODELS", &r.models)] {
+        if rows.is_empty() {
+            continue;
+        }
+        out += &format!("\n  {title}\n");
+        for g in rows.iter().take(TABLE_ROWS) {
+            out += &wrap(
+                style,
+                &cause_group_line(g),
+                &format!("  {} · ", style.bold(&clip(&g.key, 28))),
+                "    ",
+                clip(&g.key, 28).chars().count() + 5,
+            );
+        }
+    }
+    if !r.sessions.is_empty() {
+        out += "\n  SESSIONS\n";
+        for s in r.sessions.iter().take(5) {
+            out += &wrap(
+                style,
+                &format!(
+                    "{} · {} · {} requests over {} · peak context {}",
+                    clip(&s.project, 24),
+                    cause_group_line(&s.group),
+                    count(s.group.requests),
+                    duration(s.span_ms),
+                    tokens(s.peak_context)
+                ),
+                &format!("  {} · ", clip(&s.group.key, 12)),
+                "    ",
+                clip(&s.group.key, 12).chars().count() + 5,
+            );
+        }
+    }
+    out += "\n  OBSERVATIONS\n";
+    if r.observations.is_empty() {
+        out += &wrap(
+            style,
+            "no pattern above the thresholds: no narrow band of sizes, no concentration in long sessions or in one project",
+            "    ",
+            "    ",
+            4,
+        );
+    }
+    for o in &r.observations {
+        out += &wrap(
+            style,
+            &format!("{} (hint, lever: {})", o.message, o.lever),
+            "    · ",
+            "      ",
+            6,
+        );
+        if let Some(rule) = o.see_rule {
+            out += &wrap(
+                style,
+                &format!(
+                    "the same behaviour is reported by `{rule}`; these are its compactions, not a new finding"
+                ),
+                "      see   ",
+                "            ",
+                12,
+            );
+        }
+        out += &wrap(style, &o.check, "      check ", "            ", 12);
+    }
+    out += "\n  EXISTING RULES\n";
+    for x in &r.related_rules {
+        out += &wrap(
+            style,
+            x.message
+                .as_deref()
+                .or(x.reason.as_deref())
+                .unwrap_or("not measured"),
+            &format!("    {} ({}) · ", x.rule, x.status),
+            "      ",
+            x.rule.len() + x.status.len() + 10,
+        );
+    }
+    if let Some(s) = &r.settings {
+        out += "\n  SETTINGS\n";
+        out += &wrap(style, s.reference, "    docs  ", "          ", 10);
+        out += &wrap(style, s.as_of, "    as of ", "          ", 10);
+        for f in s.files.iter().filter(|f| f.state != "read") {
+            out += &wrap(
+                style,
+                &format!("{} ({} settings): {}", f.path, f.scope, f.state),
+                "    file  ",
+                "          ",
+                10,
+            );
+        }
+        let read = s.files.iter().filter(|f| f.state == "read").count();
+        out += &format!("    settings files read: {}\n", count(read as u64));
+        if !s.projects_not_read.is_empty() {
+            out += &wrap(
+                style,
+                &format!(
+                    "{}: working directory unknown or gone, so project and local settings were not looked at",
+                    s.projects_not_read
+                        .iter()
+                        .map(|p| clip(p, 28))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+                "    not read ",
+                "             ",
+                13,
+            );
+        }
+        for w in &s.windows {
+            out += &wrap(
+                style,
+                &format!(
+                    "{} {} {}{}",
+                    w.scope,
+                    w.model.as_deref().unwrap_or("every model"),
+                    w.tokens.map_or("auto".to_owned(), tokens),
+                    w.note
+                        .as_deref()
+                        .map_or(String::new(), |n| format!(" ({n})"))
+                ),
+                "    window ",
+                "           ",
+                11,
+            );
+        }
+        for c in &r.settings_comparison {
+            out += &wrap(
+                style,
+                &format!(
+                    "{}{}",
+                    c.message,
+                    if c.auto_compact_enabled == Some(false) {
+                        "; autoCompactEnabled is false there today"
+                    } else {
+                        ""
+                    }
+                ),
+                &format!("    {} · {} · ", clip(&c.project, 20), clip(&c.model, 24)),
+                "      ",
+                clip(&c.project, 20).chars().count() + clip(&c.model, 24).chars().count() + 10,
+            );
+        }
+    }
+    out += "\n";
     for n in &r.notes {
         out += &wrap(style, n, "  note  ", "        ", 8);
     }
@@ -1918,6 +2111,9 @@ fn json_source(report: &Report) -> Value {
     }
     if let Some(v) = report.skills {
         put("skills", json!(v));
+    }
+    if let Some(v) = report.compaction_causes {
+        put("compaction_causes", json!(v));
     }
     if let Some(v) = report.findings {
         put("verdict", json!(v.verdict));

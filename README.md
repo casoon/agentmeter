@@ -111,6 +111,8 @@ agentmeter --probe             # also ask Claude Code what a session start holds
 agentmeter --compare 7d         # the last 7 days next to the 7 days before (see below)
 agentmeter --transitions        # starts, resumes, compactions, pauses as a timeline (see below)
 agentmeter --subagents         # direct vs delegated usage, overlapping runs, shared files (see below)
+agentmeter --compaction-causes  # compactions by project, model, session; hints at the lever (see below)
+agentmeter --compaction-settings # also compare today's autoCompactWindow with them (reads settings files)
 agentmeter --tool-calls        # also read tool calls: repeated reads/failures, large outputs (see below)
 agentmeter --instructions .  # the instruction files that apply to a directory (see below)
 agentmeter --skills            # skills called and not observed, with their share of the skill list (see below)
@@ -182,6 +184,25 @@ no observed length. With `--tool-calls` it adds files that several agents read o
 the overlap too, with other line ranges as counter-example (Codex logs no file targets, so there it
 says so). An overlap or a shared file is a reason to look, not a conflict, and nothing here
 promises time saved by running agents in parallel or calls delegation inefficient.
+
+## Compaction causes: `--compaction-causes`
+
+Compactions by project, model and session: count, size before the compaction (minimum,
+quartiles, maximum), automatic, manual and unknown trigger, and compactions per 1,000 requests.
+A missing trigger or size stays unknown (always for Codex). Patterns are worded as hints with the
+lever they point to, never as the cause: sizes in a narrow band (a limit: the model's window or
+a setting), most compactions in sessions of more than 24 hours or in one project (the way of
+working). `compact-thrash`, `long-session` and `big-context` are shown as they report; the hints
+only count compactions in the same places.
+
+`--compaction-settings` also reads the auto-compact keys of the Claude Code settings files:
+`autoCompactWindow`, `modelSettings.<model>.autoCompactWindow` (Claude Code 2.1.288 or later) and
+`autoCompactEnabled`, from `settings.json` of the configuration directory and from
+`.claude/settings.json` and `.claude/settings.local.json` in each project's latest working
+directory. Without this flag no file outside the logs is read. The value is today's, never
+assigned to compactions of the past; a window that does not show in the observed sizes is a
+hint, not proof. Managed settings, the environment variable and the command-line flag are not
+visible and take precedence.
 
 ## Tool calls: `--tool-calls`
 

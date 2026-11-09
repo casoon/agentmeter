@@ -286,6 +286,7 @@ fn documented_json_fields_equal_the_real_ones() {
             "7d",
             "--subagents",
             "--skills",
+            "--compaction-settings",
             "--instructions",
             fixtures().join("instr/claude/repo").to_str().unwrap(),
         ],
@@ -294,7 +295,7 @@ fn documented_json_fields_equal_the_real_ones() {
     assert_eq!(v["schema_version"], 1);
     let documented = documented_fields();
     assert!(
-        documented.len() == 44,
+        documented.len() == 55,
         "the doc lists the objects: {documented:?}"
     );
     for (path, fields) in &documented {
@@ -1373,4 +1374,220 @@ fn skills_with_a_probe_show_the_skills_figure_next_to_the_scan() {
     assert_eq!(probe["place"], "empty directory");
     assert_eq!(probe["probe_tokens"], 9_900);
     assert!(probe["scanned_est_tokens"].as_u64().unwrap() > 0);
+}
+
+/// Two projects: `proja` has three automatic compactions in a narrow band and a project setting
+/// for its model; `projb` one manual compaction and a project file that is not valid JSON. The
+/// user settings set one window for every model. Returns the config dir and the root of it all.
+fn compaction_config(name: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+    let root =
+        std::env::temp_dir().join(format!("agentmeter-cli-comp-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let dir = root.join("config");
+    let (proja, projb) = (root.join("proja"), root.join("projb"));
+    for p in [&proja, &projb] {
+        std::fs::create_dir_all(p.join(".claude")).unwrap();
+    }
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("settings.json"), r#"{"autoCompactWindow":500000}"#).unwrap();
+    std::fs::write(
+        proja.join(".claude/settings.json"),
+        r#"{"modelSettings":{"claude-x":{"autoCompactWindow":200000}}}"#,
+    )
+    .unwrap();
+    std::fs::write(projb.join(".claude/settings.local.json"), "{ nope").unwrap();
+    let request = |cwd: &std::path::Path, session: &str, model: &str, minute: u32| {
+        format!(
+            r#"{{"type":"assistant","timestamp":"2026-10-01T10:{minute:02}:00.000Z","sessionId":"{session}","cwd":"{}","parentUuid":null,"message":{{"id":"{session}-{minute}","model":"{model}","usage":{{"input_tokens":1000,"output_tokens":5}},"content":[]}}}}"#,
+            cwd.display()
+        )
+    };
+    let compaction = |session: &str, minute: u32, trigger: &str, before: u64| {
+        format!(
+            r#"{{"type":"system","uuid":"c-{session}-{minute}","timestamp":"2026-10-01T10:{minute:02}:30.000Z","sessionId":"{session}","compactMetadata":{{"trigger":"{trigger}","preTokens":{before}}}}}"#
+        )
+    };
+    let mut a = Vec::new();
+    for m in 0..10 {
+        a.push(request(&proja, "s-a", "claude-x", m));
+        match m {
+            2 => a.push(compaction("s-a", m, "auto", 190_000)),
+            5 => a.push(compaction("s-a", m, "auto", 195_000)),
+            8 => a.push(compaction("s-a", m, "auto", 198_000)),
+            _ => {}
+        }
+    }
+    let mut b = Vec::new();
+    for m in 0..5 {
+        b.push(request(&projb, "s-b", "claude-y", m));
+        if m == 2 {
+            b.push(compaction("s-b", m, "manual", 80_000));
+        }
+    }
+    for (project, lines, file) in [("-a", a, "s-a"), ("-b", b, "s-b")] {
+        let p = dir.join("projects").join(project);
+        std::fs::create_dir_all(&p).unwrap();
+        std::fs::write(p.join(format!("{file}.jsonl")), lines.join("\n") + "\n").unwrap();
+    }
+    (dir, root)
+}
+
+#[test]
+fn compaction_causes_group_counts_rates_and_hints_without_reading_settings() {
+    let (dir, root) = compaction_config("causes");
+    let v = json_of(&dir, &["--compaction-causes", "--json"]);
+    let c = &v["sources"][0]["compaction_causes"];
+    assert_eq!(c["totals"]["compactions"], 4);
+    assert_eq!(c["totals"]["triggers"]["manual"], 1);
+    let a = c["projects"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["compactions"] == 3)
+        .unwrap();
+    assert_eq!(a["requests"], 10);
+    assert_eq!(a["per_1000_requests"], 300.0);
+    assert_eq!(a["tokens_before"]["min"], 190_000);
+    assert_eq!(a["tokens_before"]["max"], 198_000);
+    // The size after compaction is not in the log: counted as unknown, not as zero.
+    assert_eq!(a["without_tokens_after"], 3);
+    assert_eq!(c["models"].as_array().unwrap().len(), 2);
+    assert_eq!(c["sessions"][0]["span_ms"], 9 * 60_000);
+    // A narrow band is a hint at a limit, with the lever named; never a cause.
+    let band = c["observations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|o| o["kind"] == "size_band")
+        .unwrap();
+    assert_eq!(band["certainty"], "hint");
+    assert_eq!(band["lever"], "setting_or_window");
+    // The observation fields are documented under a heading the generic field test skips.
+    let doc = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/reference/json.md"),
+    )
+    .unwrap();
+    let section = doc
+        .split("#### `sources[].compaction_causes.observations[]`")
+        .nth(1)
+        .and_then(|rest| rest.split("\n### ").next())
+        .unwrap();
+    for key in band.as_object().unwrap().keys() {
+        assert!(
+            section.contains(&format!("- `{key}`")),
+            "{key} is documented"
+        );
+    }
+    // The existing rules appear as they report; the summary counts the same compactions.
+    assert!(
+        c["related_rules"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["rule"] == "compact-thrash")
+    );
+    let summary = json_of(&dir, &["--summary", "--json"]);
+    assert_eq!(
+        summary["sources"][0]["summary"]["compactions"]["total"],
+        c["totals"]["compactions"]
+    );
+    // Without the flag for the files nothing is read from them, and the report says so.
+    assert!(c["settings"].is_null());
+    assert!(c["settings_comparison"].as_array().unwrap().is_empty());
+    assert!(
+        c["notes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|n| n.as_str().unwrap().contains("--compaction-settings"))
+    );
+    let text = String::from_utf8(run_dir(&dir, &["--compaction-causes"]).stdout).unwrap();
+    assert!(text.contains("COMPACTION CAUSES") && !text.contains("SETTINGS"));
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn compaction_settings_are_today_by_scope_and_unreadable_files_stay_visible() {
+    let (dir, root) = compaction_config("settings");
+    let v = json_of(&dir, &["--compaction-settings", "--json"]);
+    let c = &v["sources"][0]["compaction_causes"];
+    let s = &c["settings"];
+    assert!(
+        s["as_of"]
+            .as_str()
+            .unwrap()
+            .contains("not the configuration")
+    );
+    assert!(s["reference"].as_str().unwrap().contains("2.1.288"));
+    let state = |suffix: &str| {
+        s["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|f| f["path"].as_str().unwrap().ends_with(suffix))
+            .unwrap()["state"]
+            .clone()
+    };
+    assert_eq!(state("config/settings.json"), "read");
+    assert_eq!(state("proja/.claude/settings.json"), "read");
+    assert_eq!(state("proja/.claude/settings.local.json"), "missing");
+    assert_eq!(state("projb/.claude/settings.local.json"), "invalid_json");
+    let comparison = |model: &str| {
+        c["settings_comparison"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|x| x["model"] == model)
+            .unwrap()
+            .clone()
+    };
+    // The project's entry for the model beats the user's window for every model.
+    let x = comparison("claude-x");
+    assert_eq!(x["setting"]["tokens"], 200_000);
+    assert_eq!(x["setting"]["scope"], "project");
+    assert_eq!(x["fit"], "within");
+    assert_eq!(x["above_window"], 0);
+    assert!(
+        x["message"]
+            .as_str()
+            .unwrap()
+            .contains("not claimed for the past")
+    );
+    // Only a manual compaction: nothing to compare against the user's window.
+    let y = comparison("claude-y");
+    assert_eq!(y["setting"]["tokens"], 500_000);
+    assert_eq!(y["fit"], "not_measurable");
+    assert!(y["median_tokens_before"].is_null());
+    let text = String::from_utf8(run_dir(&dir, &["--compaction-settings"]).stdout).unwrap();
+    assert!(text.contains("SETTINGS") && text.contains("invalid_json"));
+    for line in text.lines() {
+        assert!(line.chars().count() <= 88, "{line}");
+    }
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn codex_compaction_causes_keep_trigger_unknown_and_read_no_settings() {
+    let output = run_both(
+        "does-not-exist",
+        "codex-compacted",
+        &["--tool", "codex", "--compaction-settings", "--json"],
+    );
+    let v: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let c = &v["sources"][0]["compaction_causes"];
+    assert!(c["totals"]["triggers"]["unknown"].as_u64().unwrap() >= 1);
+    assert_eq!(c["totals"]["triggers"]["auto"], 0);
+    assert_eq!(c["totals"]["triggers"]["manual"], 0);
+    assert_eq!(
+        c["totals"]["without_tokens_after"],
+        c["totals"]["compactions"]
+    );
+    assert!(c["settings"].is_null());
+    assert!(
+        c["notes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|n| n.as_str().unwrap().contains("not read for this agent"))
+    );
 }

@@ -241,6 +241,7 @@ fn detail(id: &str, views: &[View], period: &str, style: Style) -> String {
                 compare: None,
                 subagents: None,
                 skills: None,
+                compaction_causes: None,
             };
             render::text(&report, style)
         })

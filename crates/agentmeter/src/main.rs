@@ -78,6 +78,8 @@ pub struct Analysis {
     pub subagents: Option<agentmeter_core::subagents::SubagentReport>,
     /// What `--skills` found.
     pub skills: Option<agentmeter_core::skills::SkillAnalysis>,
+    /// What `--compaction-causes` found.
+    pub compaction_causes: Option<agentmeter_core::compaction::CausesReport>,
 }
 
 pub fn read_sources(tool: Tool) -> Vec<Source> {
@@ -159,6 +161,18 @@ pub fn analyse(source: &Source, options: &Options, now_ms: i64, probe: Option<Pr
             agentmeter_core::subagents::analyse(dataset, tools, since_ms)
         }),
         skills: None,
+        compaction_causes: options.compaction_causes.then(|| {
+            // The settings files are read only when asked for, and only for Claude Code.
+            let settings = (options.compaction_settings && source.tool == "claude").then(|| {
+                agentmeter_claude::settings::read(&agentmeter_claude::config_dirs(), dataset)
+            });
+            agentmeter_core::compaction::analyse(
+                dataset,
+                since_ms,
+                settings,
+                options.compaction_settings,
+            )
+        }),
         tool_calls: source
             .tools
             .as_ref()
@@ -362,6 +376,7 @@ fn run(options: &Options, interactive: bool) -> ExitCode {
             compare: a.compare.as_ref(),
             subagents: a.subagents.as_ref(),
             skills: a.skills.as_ref(),
+            compaction_causes: a.compaction_causes.as_ref(),
         })
         .collect();
     if options.json {
