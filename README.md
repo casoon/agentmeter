@@ -111,6 +111,7 @@ agentmeter --probe             # also ask Claude Code what a session start holds
 agentmeter --transitions        # starts, resumes, compactions, pauses as a timeline (see below)
 agentmeter --tool-calls        # also read tool calls: repeated reads/failures, large outputs (see below)
 agentmeter --instructions .  # the instruction files that apply to a directory (see below)
+agentmeter --skills            # skills called and not observed, with their share of the skill list (see below)
 agentmeter --tool codex        # claude, codex or all (default)
 agentmeter --since 7d          # 7d, 30d or a date such as 2026-10-01
 agentmeter --project <name>    # one project
@@ -193,9 +194,31 @@ estimated as bytes ÷ 4. Findings (`broken-import`, `duplicate-instructions`, `b
 This is today's configuration, separate from the log history. Worktrees are separate paths:
 scan the worktree to see its files. Rules in [Findings](docs/reference/findings.md).
 
+## Skills: `--skills`
+
+Claude Code sends the name and description of every model-invocable skill with each session
+start. `--skills` shows which installed skills were called in the period, which were not
+observed, and how much of that list the unused entries take. It opens message content only for
+the skill name of `Skill` tool calls, and reads the `SKILL.md` headers of user, plugin and
+project skills (the project skills of the sessions' working directories) for the name and the
+length of the description; no skill content, argument or prompt text is kept or printed.
+
+Per skill: calls in the period, the latest call in the logs, and the size of its list entry in
+bytes and estimated tokens (bytes ÷ 4, not counted: Claude Code does not document the list's
+format). The finding names the largest unused entries and what to check: disable a plugin, shorten
+a description, keep a skill in the one project that needs it. A skill without a call is "not
+observed in the period", never "never used", and a rarely used skill can still matter. A skill
+you start by hand with `/name` is not counted, since the log records it only in the prompt text,
+and built-in, enterprise, nested and claude.ai skills are not scanned (a call to one is listed
+apart). `disable-model-invocation: true` skills have no list entry and are not counted as unused.
+With `--probe`, Claude Code's own `Skills` figure is shown next to the scan; the two cover
+different sets. Codex logs no skill calls, so there it is "not measurable". Rules followed:
+Claude Code skills documentation, 2026-11, checked with Claude Code 2.1.316
+([Findings](docs/reference/findings.md)).
+
 ## Privacy
 
-Read-only, no network, no telemetry; `--tool-calls` opens message content for call ids, paths, command fingerprints and result sizes (see above); `--probe` is the one exception that starts another program
+Read-only, no network, no telemetry; `--tool-calls` and `--skills` open message content for call ids, paths, command fingerprints, skill names and result sizes (see above); `--probe` is the one exception that starts another program
 (`claude`, see above). The log files contain prompt and tool text, so they are
 read in full, but agentmeter extracts only usage metadata (token counts, timestamps, model,
 session and project ids, compaction events). Prompt and tool text is not analysed, stored or

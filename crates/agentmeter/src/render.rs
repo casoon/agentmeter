@@ -76,6 +76,7 @@ pub struct Report<'a> {
     pub instructions: Option<&'a InstructionScan>,
     pub tool_calls: Option<&'a ToolAnalysis>,
     pub transitions: Option<&'a agentmeter_core::transitions::TransitionReport>,
+    pub skills: Option<&'a agentmeter_core::skills::SkillAnalysis>,
 }
 
 /// Widest the text gets, also in a wider terminal or a pipe; bars are at most [`BAR`] cells.
@@ -203,6 +204,9 @@ pub fn text(report: &Report, style: Style) -> String {
     }
     if let Some(tools) = report.tool_calls {
         out += &tool_calls_text(tools, style);
+    }
+    if let Some(skills) = report.skills {
+        out += &skills_text(skills, style);
     }
     if let Some(scan) = report.instructions {
         out += &instructions_text(scan, style);
@@ -438,6 +442,156 @@ fn tool_calls_text(a: &ToolAnalysis, style: Style) -> String {
         if let Some(n) = &r.next_step {
             out += &wrap(style, &format!("next  {n}"), indent, "          ", 4);
         }
+    }
+    out
+}
+
+/// Rows of the used skills shown in the text; the JSON has all.
+const SKILL_ROWS: usize = 10;
+
+fn skills_text(a: &agentmeter_core::skills::SkillAnalysis, style: Style) -> String {
+    use agentmeter_core::skills::ListState;
+    let mut out = heading(style, "SKILLS");
+    out += &wrap(style, a.method, "  method     ", "             ", 13);
+    out += &wrap(style, a.rules_version, "  rules      ", "             ", 13);
+    out += &wrap(
+        style,
+        &format!(
+            "{} installed · {} listed · {} manual only · {} unreadable · {} called in the period \
+             ({} calls)",
+            count(a.installed),
+            count(a.listed),
+            count(a.user_only),
+            count(a.unreadable),
+            count(a.used),
+            count(a.calls)
+        ),
+        "  skills     ",
+        "             ",
+        13,
+    );
+    out += &wrap(
+        style,
+        &format!(
+            "{} bytes, ≈{} tokens (estimated) for {} listed entries",
+            count(a.listed_bytes),
+            tokens(a.listed_est_tokens),
+            count(a.listed)
+        ),
+        "  list size  ",
+        "             ",
+        13,
+    );
+    if let Some(p) = &a.probe {
+        out += &wrap(
+            style,
+            &format!(
+                "/context ({}) counts ≈{} tokens for Skills; the scan of user and plugin skills \
+                 gives ≈{}. Different scope, not a check of one against the other",
+                p.place,
+                tokens(p.probe_tokens),
+                tokens(p.scanned_est_tokens)
+            ),
+            "  probe      ",
+            "             ",
+            13,
+        );
+    }
+    let (mark, tone, word) = match a.status {
+        "observed" => ("◆", Tone::Warning, "not observed in the period"),
+        "checked_none" => ("✓", Tone::Success, "checked, nothing to report"),
+        _ => ("·", Tone::Muted, "not measurable"),
+    };
+    out += &format!(
+        "\n  {} {} · {}\n",
+        style.tone(tone, mark),
+        style.bold("unused-skills"),
+        word
+    );
+    let indent = "    ";
+    if let Some(reason) = &a.reason {
+        out += &wrap(style, reason, indent, indent, 4);
+    }
+    if let Some(m) = &a.message {
+        out += &wrap(style, m, indent, indent, 4);
+    }
+    for r in &a.largest_unused {
+        out += &wrap(
+            style,
+            &format!(
+                "{} B ≈{} tokens  {} [{}]",
+                count(r.list_bytes),
+                tokens(r.list_est_tokens),
+                r.name,
+                r.source
+            ),
+            "    · ",
+            "      ",
+            6,
+        );
+    }
+    let used: Vec<_> = a.skills.iter().filter(|r| r.calls > 0).collect();
+    if !used.is_empty() {
+        out += "\n    called in the period\n";
+    }
+    for r in used.iter().take(SKILL_ROWS) {
+        let last = r.last_used.as_deref().unwrap_or("?");
+        out += &wrap(
+            style,
+            &format!(
+                "{} × {} [{}] · last {last}",
+                count(r.calls),
+                r.name,
+                r.source
+            ),
+            "    · ",
+            "      ",
+            6,
+        );
+    }
+    if used.len() > SKILL_ROWS {
+        out += &format!(
+            "    … and {} more (all in --json)\n",
+            used.len() - SKILL_ROWS
+        );
+    }
+    if !a.called_not_scanned.is_empty() {
+        let names: Vec<String> = a
+            .called_not_scanned
+            .iter()
+            .map(|c| format!("{} × {}", count(c.calls), c.name))
+            .collect();
+        out += "\n";
+        out += &wrap(
+            style,
+            &format!("called, not among the scanned skills  {}", names.join(", ")),
+            "    ",
+            "    ",
+            4,
+        );
+    }
+    let manual = a
+        .skills
+        .iter()
+        .filter(|r| r.state == ListState::UserOnly)
+        .count();
+    if manual > 0 {
+        out += &wrap(
+            style,
+            &format!(
+                "{manual} skill(s) are manual only: no entry in the list, not counted as unused"
+            ),
+            "    ",
+            "    ",
+            4,
+        );
+    }
+    if let Some(n) = &a.next_step {
+        out += &wrap(style, &format!("next  {n}"), indent, "          ", 4);
+    }
+    out += "\n";
+    for n in &a.notes {
+        out += &wrap(style, n, "  note  ", "        ", 8);
     }
     out
 }
@@ -1420,6 +1574,9 @@ fn json_source(report: &Report) -> Value {
     }
     if let Some(v) = report.transitions {
         put("transitions", json!(v));
+    }
+    if let Some(v) = report.skills {
+        put("skills", json!(v));
     }
     if let Some(v) = report.findings {
         put("verdict", json!(v.verdict));

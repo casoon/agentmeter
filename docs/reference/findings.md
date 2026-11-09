@@ -98,6 +98,29 @@ followed: Claude Code memory documentation and Codex `AGENTS.md` discovery (rust
 of 2026-11; the two agents share no heuristic. Not evaluated: Codex project trust, contradictions
 between files.
 
+## Skill rule
+
+Only with `--skills`, Claude Code only. `unused-skills` compares the `Skill` tool calls of the
+period with the skills installed on disk (user `~/.claude/skills`, plugin and project
+`.claude/skills` of the sessions' working directories) and totals the session-start list entries
+of the listed skills that were not called. Such a skill is "not observed in the period", never
+"never used": the log shows no skill the user starts by hand with `/name`, and a rarely used
+skill can still matter. The result lists skills installed and called, the largest unused entries
+and the next step to check (disable a plugin, shorten a description, keep a skill in the project
+that needs it); nothing is changed. Codex logs no skill calls, so there it is "not measurable".
+
+The size of an entry is bytes of the name plus `description` and `when_to_use`, cut at the
+documented 1,536 characters; tokens are bytes ÷ 4 and an estimate. Claude Code does not document
+the exact format of the list, so neither number is a count. `--probe` adds Claude Code's own
+`Skills` figure next to the scan; the two cover different sets and are not reconciled. Rules
+followed: Claude Code skills documentation as of 2026-11, checked with Claude Code 2.1.316:
+personal, project and plugin skills (`plugin:name`), the frontmatter `name` (the directory name
+also calls the skill), the description in the list at session start, and
+`disable-model-invocation: true` (no entry, so not counted as unused). Not covered: enterprise,
+nested and added-directory skills, skills synced from claude.ai, built-in skills,
+`skillOverrides` and plugin enablement in project settings; a skill called but not found is
+listed apart.
+
 More rules are planned; see the project plan before relying on a rule that is not listed here.
 
 ## How the numbers are derived
