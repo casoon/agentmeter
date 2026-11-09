@@ -9,6 +9,8 @@ behaviour.
 
 ### Added
 
+- **CLI:** `--transitions` prints a timeline per log file of session starts, resumes and forks (parent only where the log names it), incomplete logs, compactions and pauses of one hour or more, with the context before, after (only if logged) and at the next request, time to it and requests to the next compaction; with `--tool-calls` also the areas read again after a compaction and a project hint. A pause or a new chat is a marker, never a verdict; compactions are the events the summary counts. JSON key `transitions` ([#14](https://github.com/casoon/agentmeter/issues/14)).
+
 - **CLI:** `--tool-calls` is an explicit extension that also reads tool calls and results and reports `repeat-read`, `repeat-failure` and `large-output` with period, sample, counter-examples (re-read after an observed edit or compaction, other line ranges), evidence and next step; limits are uncalibrated. Only ids, tool names, file paths, command fingerprints and result sizes are kept, no command or output text; Codex measures `large-output` only. JSON key `tool_calls` ([#13](https://github.com/casoon/agentmeter/issues/13)).
 
 - **CLI:** `--instructions <dir>` lists the instruction files that apply to a directory by each agent's own loading rules (Claude Code: `CLAUDE.md` hierarchy, rules, imports, excludes; Codex: `AGENTS.md` from the `.git` root with `project_doc_max_bytes`) with source, size, estimated tokens and load state (`expected`, `confirmed` via `--probe`, `on_demand`, `not_loaded`, `unreadable`, `missing`); findings `broken-import`, `duplicate-instructions`, `base-size`, `load-limit`. Reads files only; JSON key `instructions` ([#12](https://github.com/casoon/agentmeter/issues/12)).

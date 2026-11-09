@@ -108,6 +108,7 @@ agentmeter --sessions          # sessions by input
 agentmeter --projects          # projects by input
 agentmeter --findings          # rules with conclusion, measure, evidence and next step
 agentmeter --probe             # also ask Claude Code what a session start holds (see below)
+agentmeter --transitions        # starts, resumes, compactions, pauses as a timeline (see below)
 agentmeter --tool-calls        # also read tool calls: repeated reads/failures, large outputs (see below)
 agentmeter --instructions .  # the instruction files that apply to a directory (see below)
 agentmeter --tool codex        # claude, codex or all (default)
@@ -137,6 +138,17 @@ the probe only runs when asked for (`--probe`, or *Context probe* in the menu). 
 today's configuration, not the one the period ran with, and it measures the command-line
 `claude`: the report names the front end that wrote the sessions, since a desktop app or IDE adds
 instructions and tools of its own.
+
+## Transitions: `--transitions`
+
+A timeline of session starts, resumes and forks, compactions and pauses of an hour or more, one
+per log file, from metadata only. Each compaction shows the context before, after (only where the
+log records it; never a guess) and at the next request, the time until it and the requests until
+the next compaction, with file and event id as evidence. A resume or fork names its parent only
+where the log does; sessions are never linked by time, and a pause or a new chat is a marker, not
+a loss of context. With `--tool-calls` each compaction also counts the areas read again in the
+next 30 calls that were read before it and not edited since, and a project hint appears when this
+repeats; consumption after a transition is measured, not proven avoidable.
 
 ## Tool calls: `--tool-calls`
 

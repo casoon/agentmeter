@@ -281,6 +281,7 @@ fn documented_json_fields_equal_the_real_ones() {
             "--findings",
             "--probe",
             "--tool-calls",
+            "--transitions",
             "--instructions",
             fixtures().join("instr/claude/repo").to_str().unwrap(),
         ],
@@ -289,7 +290,7 @@ fn documented_json_fields_equal_the_real_ones() {
     assert_eq!(v["schema_version"], 1);
     let documented = documented_fields();
     assert!(
-        documented.len() == 24,
+        documented.len() == 28,
         "the doc lists the objects: {documented:?}"
     );
     for (path, fields) in &documented {
@@ -646,4 +647,147 @@ fn tool_calls_text_fits_and_codex_marks_rules_not_measurable() {
     let rules = v["sources"][0]["tool_calls"]["rules"].as_array().unwrap();
     assert_eq!(rules[0]["status"], "not_measurable");
     assert_eq!(rules[1]["status"], "not_measurable");
+}
+
+/// Two Claude log files: a main session (start, reads, a compaction without a size after it, the
+/// same reads again, a two-hour pause) and a resumed one that names the first as its parent.
+fn transitions_config(name: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!(
+        "agentmeter-cli-trans-{name}-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    let project = dir.join("projects/-Users-me-GitHub-demo");
+    std::fs::create_dir_all(&project).unwrap();
+    let assistant = |session: &str, ts: &str, id: &str, tool: Option<(&str, &str)>| {
+        let content = tool.map_or("[]".to_owned(), |(name, input)| {
+            format!(r#"[{{"type":"tool_use","id":"tu-{id}","name":"{name}","input":{input}}}]"#)
+        });
+        format!(
+            r#"{{"type":"assistant","timestamp":"{ts}","sessionId":"{session}","parentUuid":null,"message":{{"id":"{id}","model":"claude-x","usage":{{"input_tokens":1000,"output_tokens":5}},"content":{content}}}}}"#
+        )
+    };
+    let user = |session: &str, ts: &str, id: &str| {
+        format!(
+            r#"{{"type":"user","timestamp":"{ts}","sessionId":"{session}","message":{{"role":"user","content":[{{"type":"tool_result","tool_use_id":"tu-{id}","content":"ok","is_error":false}}]}}}}"#
+        )
+    };
+    let read = |p: &str| ("Read", format!(r#"{{"file_path":"{p}"}}"#));
+    let mut main = Vec::new();
+    for (i, p) in ["/p/a.rs", "/p/b.rs"].iter().enumerate() {
+        let (tool, input) = read(p);
+        let ts = format!("2026-10-01T10:0{i}:00.000Z");
+        main.push(assistant(
+            "s-main",
+            &ts,
+            &format!("m{i}"),
+            Some((tool, &input)),
+        ));
+        main.push(user("s-main", &ts, &format!("m{i}")));
+    }
+    main.push(r#"{"type":"system","uuid":"c1","timestamp":"2026-10-01T10:10:00.000Z","sessionId":"s-main","compactMetadata":{"trigger":"auto","preTokens":900000}}"#.to_owned());
+    for (i, p) in ["/p/a.rs", "/p/b.rs", "/p/new.rs"].iter().enumerate() {
+        let (tool, input) = read(p);
+        let ts = format!("2026-10-01T10:1{}:00.000Z", i + 1);
+        main.push(assistant(
+            "s-main",
+            &ts,
+            &format!("n{i}"),
+            Some((tool, &input)),
+        ));
+        main.push(user("s-main", &ts, &format!("n{i}")));
+    }
+    main.push(assistant(
+        "s-main",
+        "2026-10-01T13:00:00.000Z",
+        "late",
+        None,
+    ));
+    std::fs::write(project.join("s-main.jsonl"), main.join("\n") + "\n").unwrap();
+    // A resumed session: copied history under the parent's id, then its own request.
+    let resumed = [
+        assistant("s-main", "2026-10-01T10:00:00.000Z", "m0", None),
+        assistant("s-resumed", "2026-10-02T09:00:00.000Z", "r1", None),
+    ];
+    std::fs::write(project.join("s-resumed.jsonl"), resumed.join("\n") + "\n").unwrap();
+    dir
+}
+
+#[test]
+fn transitions_json_separates_start_resume_compaction_pause_and_keeps_unknowns() {
+    let dir = transitions_config("json");
+    let output = run_dir(&dir, &["--transitions", "--tool-calls", "--json"]);
+    assert!(output.status.success());
+    let v: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let t = &v["sources"][0]["transitions"];
+    let counts = &t["counts"];
+    assert_eq!(counts["compactions"], 1);
+    assert_eq!(counts["pauses"], 1);
+    assert_eq!(counts["resumed_or_forked"], 1);
+    let all = t["transitions"].as_array().unwrap();
+    let of = |kind: &str| all.iter().find(|x| x["kind"] == kind).unwrap();
+    // The parent is named by the log, not guessed from time.
+    assert_eq!(of("resumed_or_forked")["parent"]["id"], "s-main");
+    assert_eq!(of("resumed_or_forked")["parent"]["in_logs"], true);
+    // A new chat in the same project is only a start, with no parent.
+    assert!(of("start")["parent"].is_null());
+    // The size after is unknown, not zero; the evidence is file and event.
+    let c = of("compaction");
+    assert!(c["context_after"].is_null());
+    assert_eq!(c["context_before"], 900_000);
+    assert_eq!(c["event"], "c1");
+    assert!(c["file"].as_str().unwrap().ends_with("s-main.jsonl"));
+    // Two of the three reads after it cover areas read before; /p/new.rs is new.
+    assert_eq!(c["repeats"]["reads"], 3);
+    assert_eq!(c["repeats"]["reread_areas"], 2);
+    // The same compaction the summary counts, not an extra one.
+    let summary = json_of(&dir, &["--summary", "--json"]);
+    assert_eq!(
+        summary["sources"][0]["summary"]["compactions"]["total"],
+        counts["compactions"]
+    );
+    // The pause carries both contexts and no verdict field.
+    assert!(of("pause")["repeats"].is_null());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+fn json_of(config: &std::path::Path, args: &[&str]) -> serde_json::Value {
+    serde_json::from_slice(&run_dir(config, args).stdout).unwrap()
+}
+
+#[test]
+fn transitions_without_tool_data_stay_a_metadata_timeline() {
+    let dir = transitions_config("meta");
+    let v = json_of(&dir, &["--transitions", "--json"]);
+    let t = &v["sources"][0]["transitions"];
+    assert_eq!(t["tool_data"], false);
+    assert!(
+        t["transitions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|x| x["repeats"].is_null())
+    );
+    assert!(v["sources"][0].get("tool_calls").is_none());
+    let text = String::from_utf8(run_dir(&dir, &["--transitions", "--tool-calls"]).stdout).unwrap();
+    assert!(text.contains("TRANSITIONS") && text.contains("cover areas read before"));
+    for line in text.lines() {
+        assert!(line.chars().count() <= 88, "{line}");
+    }
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn codex_transitions_leave_unknown_sizes_unknown() {
+    let output = run_both(
+        "does-not-exist",
+        "codex-compacted",
+        &["--tool", "codex", "--transitions", "--json"],
+    );
+    let v: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let all = v["sources"][0]["transitions"]["transitions"]
+        .as_array()
+        .unwrap();
+    let c = all.iter().find(|x| x["kind"] == "compaction").unwrap();
+    assert!(c["context_after"].is_null());
 }

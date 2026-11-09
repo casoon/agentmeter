@@ -75,6 +75,7 @@ pub struct Report<'a> {
     pub probe: Option<&'a Probe>,
     pub instructions: Option<&'a InstructionScan>,
     pub tool_calls: Option<&'a ToolAnalysis>,
+    pub transitions: Option<&'a agentmeter_core::transitions::TransitionReport>,
 }
 
 /// Widest the text gets, also in a wider terminal or a pipe; bars are at most [`BAR`] cells.
@@ -197,6 +198,9 @@ pub fn text(report: &Report, style: Style) -> String {
     if let Some(findings) = report.findings {
         out += &findings_text(findings, report.probe, style);
     }
+    if let Some(t) = report.transitions {
+        out += &transitions_text(t, style);
+    }
     if let Some(tools) = report.tool_calls {
         out += &tool_calls_text(tools, style);
     }
@@ -208,6 +212,134 @@ pub fn text(report: &Report, style: Style) -> String {
     }
     if let Some(projects) = report.projects {
         out += &projects_text(projects, style);
+    }
+    out
+}
+
+fn duration(ms: i64) -> String {
+    let minutes = ms / 60_000;
+    match minutes {
+        0..60 => format!("{minutes} min"),
+        60..2880 => format!("{:.1} h", minutes as f64 / 60.0),
+        _ => format!("{:.1} d", minutes as f64 / 1440.0),
+    }
+}
+
+/// Context size: the log's number, or the word for not recorded.
+fn ctx_or_unknown(value: Option<u64>) -> String {
+    value.map_or("unknown".to_owned(), tokens)
+}
+
+fn transitions_text(r: &agentmeter_core::transitions::TransitionReport, style: Style) -> String {
+    let mut out = heading(style, "TRANSITIONS");
+    out += &wrap(style, r.method, "  method     ", "             ", 13);
+    let c = &r.counts;
+    out += &wrap(
+        style,
+        &format!(
+            "{} starts · {} resumed or forked · {} incomplete logs · {} compactions · {} pauses of 1 h or more",
+            count(c.starts),
+            count(c.resumed_or_forked),
+            count(c.incomplete_log),
+            count(c.compactions),
+            count(c.pauses)
+        ),
+        "  observed   ",
+        "             ",
+        13,
+    );
+    if !r.tool_data {
+        out += &wrap(
+            style,
+            "tool calls were not read: add --tool-calls to check what is read again after a compaction",
+            "  note       ",
+            "             ",
+            13,
+        );
+    }
+    out += "\n";
+    for p in r
+        .projects
+        .iter()
+        .filter(|p| p.counts.compactions > 0)
+        .take(TABLE_ROWS)
+    {
+        out += &format!(
+            "  {} · {} compactions, median {} before",
+            style.bold(&clip(&p.project, 28)),
+            count(p.counts.compactions),
+            ctx_or_unknown(p.median_context_before_compaction)
+        );
+        if p.windows_checked > 0 {
+            out += &format!(
+                " · {} of {} followed by re-read areas ({})",
+                count(p.compactions_with_rereads),
+                count(p.windows_checked),
+                count(p.rereads_after_compaction)
+            );
+        }
+        out += "\n";
+        if let Some(h) = &p.hint {
+            out += &wrap(style, h, "    hint  ", "          ", 10);
+        }
+    }
+    // The compactions with the most re-read areas, each with its evidence.
+    let mut shown: Vec<&agentmeter_core::transitions::Transition> = r
+        .transitions
+        .iter()
+        .filter(|t| t.kind == "compaction")
+        .collect();
+    shown.sort_by_key(|t| std::cmp::Reverse(t.repeats.as_ref().map_or(0, |x| x.reread_areas)));
+    for t in shown.into_iter().take(5) {
+        out += &format!("\n  compaction {} · {}\n", t.time, clip(&t.project, 30));
+        out += &wrap(
+            style,
+            &format!(
+                "context before {} · after {} (log) · next request {} after {}",
+                ctx_or_unknown(t.context_before),
+                ctx_or_unknown(t.context_after),
+                ctx_or_unknown(t.next_request_context),
+                t.ms_to_next_request.map_or("unknown".to_owned(), duration)
+            ),
+            "    ",
+            "    ",
+            4,
+        );
+        out += &wrap(
+            style,
+            &format!(
+                "{} requests until {}",
+                count(t.requests_to_next_compaction.unwrap_or(0)),
+                if t.then_log_ends == Some(true) {
+                    "the end of the log"
+                } else {
+                    "the next compaction"
+                }
+            ),
+            "    ",
+            "    ",
+            4,
+        );
+        if let Some(x) = &t.repeats {
+            out += &wrap(
+                style,
+                &format!(
+                    "{} of {} reads in {} cover areas read before; {} repeated failed calls",
+                    x.reread_areas, x.reads, x.window, x.failures_repeated
+                ),
+                "    ",
+                "    ",
+                4,
+            );
+            for e in &x.examples {
+                out += &wrap(style, e, "    · ", "      ", 6);
+            }
+        }
+        out += &evidence_text(style, &t.file, t.event.as_deref().unwrap_or("-"));
+    }
+    out += "\n";
+    for n in &r.notes {
+        out += &wrap(style, n, "  note  ", "        ", 8);
     }
     out
 }
@@ -1285,6 +1417,9 @@ fn json_source(report: &Report) -> Value {
     }
     if let Some(v) = report.tool_calls {
         put("tool_calls", json!(v));
+    }
+    if let Some(v) = report.transitions {
+        put("transitions", json!(v));
     }
     if let Some(v) = report.findings {
         put("verdict", json!(v.verdict));

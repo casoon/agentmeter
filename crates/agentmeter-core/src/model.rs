@@ -113,6 +113,8 @@ pub struct SessionStart {
     pub entrypoint: Option<String>,
     /// Working directory at the start of the session; used only to run a probe there.
     pub cwd: Option<String>,
+    /// The session this one was resumed or forked from, when the log names it.
+    pub parent: Option<String>,
 }
 
 /// What the agent itself reports it would send at the start of a session in one directory

@@ -11,6 +11,7 @@ pub mod model;
 pub mod report;
 pub mod time;
 pub mod toolcalls;
+pub mod transitions;
 
 pub use findings::{Evaluation, Finding, Level, evaluate};
 pub use model::{Compaction, DataQuality, Dataset, ReadStats, Request, SessionStart};
