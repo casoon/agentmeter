@@ -39,6 +39,8 @@ pub enum Check {
 
 /// Values `--check` accepts, for the error message.
 const CHECKS: &str = "data-quality";
+const CAPTURE_NAME: &str =
+    "a capture name has letters, digits, - _ . only, up to 64, and does not start with a dot";
 
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Options {
@@ -69,6 +71,22 @@ pub struct Options {
     pub compaction_causes: bool,
     /// Also read today's auto-compact settings files; implies `compaction_causes`.
     pub compaction_settings: bool,
+    /// Compare the period before a user-given change date with the one after it (00:00 UTC, ms).
+    pub changed_on: Option<i64>,
+    /// The user's name for that change.
+    pub change_label: Option<String>,
+    /// What to do with local captures.
+    pub capture: Option<CaptureAction>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum CaptureAction {
+    /// Write the period since `--since` to a capture of this name.
+    Save(String),
+    List,
+    /// Compare two stored captures, earlier first.
+    Compare(String, String),
+    Delete(String),
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -130,6 +148,52 @@ where
                 options.compaction_settings = true;
                 options.compaction_causes = true;
             }
+            "--changed-on" => match args.next() {
+                Some(value) => match parse_date_ms(&value) {
+                    Some(ms) => options.changed_on = Some(ms),
+                    None => {
+                        return Invocation::Error(format!(
+                            "`{value}` is not a date; use a day like 2026-10-01"
+                        ));
+                    }
+                },
+                None => return Invocation::Error("--changed-on needs a date".to_owned()),
+            },
+            "--change-label" => match args.next() {
+                Some(value) => options.change_label = Some(value),
+                None => return Invocation::Error("--change-label needs a text".to_owned()),
+            },
+            "--capture" | "--captures" | "--delete-capture" | "--compare-captures" => {
+                let action = match arg.as_str() {
+                    "--captures" => Some(CaptureAction::List),
+                    "--capture" => args.next().map(CaptureAction::Save),
+                    "--delete-capture" => args.next().map(CaptureAction::Delete),
+                    _ => match (args.next(), args.next()) {
+                        (Some(a), Some(b)) => Some(CaptureAction::Compare(a, b)),
+                        _ => None,
+                    },
+                };
+                let Some(action) = action else {
+                    return Invocation::Error(format!("{arg} needs its capture name(s)"));
+                };
+                if let CaptureAction::Save(n) | CaptureAction::Delete(n) = &action
+                    && !agentmeter_core::capture::valid_name(n)
+                {
+                    return Invocation::Error(CAPTURE_NAME.to_owned());
+                }
+                if let CaptureAction::Compare(a, b) = &action
+                    && !(agentmeter_core::capture::valid_name(a)
+                        && agentmeter_core::capture::valid_name(b))
+                {
+                    return Invocation::Error(CAPTURE_NAME.to_owned());
+                }
+                if options.capture.replace(action).is_some() {
+                    return Invocation::Error(
+                        "--capture, --captures, --compare-captures and --delete-capture do not combine"
+                            .to_owned(),
+                    );
+                }
+            }
             "--probe" => {
                 options.probe = true;
                 options.findings = true;
@@ -183,6 +247,22 @@ where
             "--compare sets both periods itself; it does not combine with --since".to_owned(),
         );
     }
+    if options.changed_on.is_some() && options.since.is_some() {
+        return Invocation::Error(
+            "--changed-on sets both periods itself; it does not combine with --since".to_owned(),
+        );
+    }
+    if options.change_label.is_some()
+        && options.changed_on.is_none()
+        && !matches!(options.capture, Some(CaptureAction::Save(_)))
+    {
+        return Invocation::Error("--change-label needs --changed-on or --capture".to_owned());
+    }
+    if matches!(options.capture, Some(CaptureAction::Save(_))) && options.since.is_none() {
+        return Invocation::Error(
+            "--capture needs --since to say which period it records".to_owned(),
+        );
+    }
     if !(options.sessions
         || options.projects
         || options.findings
@@ -192,7 +272,9 @@ where
         || options.compare.is_some()
         || options.subagents
         || options.skills
-        || options.compaction_causes)
+        || options.compaction_causes
+        || options.changed_on.is_some()
+        || options.capture.is_some())
     {
         options.summary = true;
     }
@@ -265,6 +347,24 @@ Options:
                          and compare them with the sizes. Reads those files only; the setting
                          is today's, never assigned to compactions of the past. Implies
                          --compaction-causes.
+      --changed-on <date>
+                         The period before a change next to the period since it, of equal
+                         length: the same figures as --compare. The date (like 2026-10-01) is
+                         yours, never guessed. A difference is not an effect of the change;
+                         model and front-end shifts and short periods are named as limits.
+                         Does not combine with --since.
+      --change-label <t> Your name for the change, shown with --changed-on or kept in a capture.
+      --capture <name>   Save the figures of the period given by --since (not the logs) as a
+                         local capture, for later comparison. Never overwrites; numbers only,
+                         no conversation, code or configuration text. Needs --since and one
+                         source (--tool). Files: $AGENTMETER_DATA_DIR/captures, else
+                         $XDG_DATA_HOME/agentmeter/captures, else ~/.local/share/agentmeter/captures.
+      --captures         List the stored captures.
+      --compare-captures <earlier> <later>
+                         Compare two captures like --compare; not comparable (with the reason)
+                         across other sources, projects or rule versions.
+      --delete-capture <name>
+                         Delete a capture.
       --json             Print JSON instead of text (schema: docs/reference/json.md)
       --check <name>     data-quality: exit 1 if a source has unreadable data or none to
                          analyse, 0 otherwise, 2 for a bad call. Findings never fail it.
@@ -426,6 +526,47 @@ mod tests {
             panic!("expected a run");
         };
         assert!(!options.compaction_causes && !options.compaction_settings);
+    }
+
+    #[test]
+    fn changed_on_needs_a_date_and_stands_alone() {
+        let Invocation::Run(options) =
+            run(&["--changed-on", "2026-10-01", "--change-label", "new rules"])
+        else {
+            panic!("expected a run");
+        };
+        assert!(options.changed_on.is_some() && !options.summary);
+        assert_eq!(options.change_label.as_deref(), Some("new rules"));
+        for bad in [
+            &["--changed-on"][..],
+            &["--changed-on", "7d"],
+            &["--change-label", "x"],
+            &["--changed-on", "2026-10-01", "--since", "7d"],
+        ] {
+            assert!(matches!(run(bad), Invocation::Error(_)), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn capture_actions_are_validated_and_exclusive() {
+        let Invocation::Run(options) = run(&["--capture", "a", "--since", "7d"]) else {
+            panic!("expected a run");
+        };
+        assert_eq!(options.capture, Some(CaptureAction::Save("a".into())));
+        assert!(!options.summary);
+        assert!(matches!(
+            run(&["--compare-captures", "a", "b"]),
+            Invocation::Run(_)
+        ));
+        for bad in [
+            &["--capture", "a"][..],
+            &["--capture", "../a", "--since", "7d"],
+            &["--delete-capture"],
+            &["--compare-captures", "a"],
+            &["--captures", "--delete-capture", "a"],
+        ] {
+            assert!(matches!(run(bad), Invocation::Error(_)), "{bad:?}");
+        }
     }
 
     #[test]

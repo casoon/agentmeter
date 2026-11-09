@@ -17,7 +17,7 @@ use crate::findings::{Evaluation, evaluate};
 use crate::model::{Compaction, Dataset, Request};
 use crate::report::summarize;
 use crate::time::{DAY_MS, format_iso};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 /// Active days a window needs before its values are compared. Uncalibrated assumption.
@@ -40,7 +40,7 @@ pub struct Window {
 }
 
 /// A model's or front end's part of a window.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Share {
     pub label: String,
     pub count: u64,
@@ -48,7 +48,7 @@ pub struct Share {
 }
 
 /// What one window holds.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WindowFacts {
     pub from: String,
     pub to: String,
@@ -130,15 +130,16 @@ fn ratio(part: u64, whole: u64, scale: f64) -> Option<f64> {
 }
 
 /// A figure of one window with its denominator.
-struct Figure {
-    value: Option<f64>,
-    denominator: u64,
-    note: Option<String>,
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Figure {
+    pub value: Option<f64>,
+    pub denominator: u64,
+    pub note: Option<String>,
 }
 
-struct Side {
-    facts: WindowFacts,
-    figures: Vec<(&'static str, Figure)>,
+pub(crate) struct Side {
+    pub(crate) facts: WindowFacts,
+    pub(crate) figures: Vec<(&'static str, Figure)>,
 }
 
 fn shares(counts: BTreeMap<String, u64>) -> Vec<Share> {
@@ -172,7 +173,7 @@ fn rule_figure(evaluation: &Evaluation, rule: &str, use_sample: bool) -> Figure 
     }
 }
 
-fn side(dataset: &Dataset, window: Window) -> Side {
+pub(crate) fn side(dataset: &Dataset, window: Window) -> Side {
     let in_window = |time_ms: i64| time_ms >= window.from_ms && time_ms < window.to_ms;
     let requests: Vec<&Request> = dataset
         .requests
@@ -294,7 +295,7 @@ fn side(dataset: &Dataset, window: Window) -> Side {
 }
 
 /// (name, unit, denominator unit) in output order.
-const METRICS: [(&str, &str, &str); 8] = [
+pub(crate) const METRICS: [(&str, &str, &str); 8] = [
     ("active_days", "days", "calendar days in the window"),
     ("requests_per_active_day", "requests", "active days"),
     ("input_per_request", "tokens", "requests"),
@@ -366,8 +367,11 @@ fn describe(name: &str, facts: &WindowFacts) -> String {
 /// Compares two windows of one dataset. `earlier` and `later` are only names: nothing requires
 /// `earlier` to precede `later`.
 pub fn compare(dataset: &Dataset, earlier: Window, later: Window) -> Comparison {
-    let a = side(dataset, earlier);
-    let b = side(dataset, later);
+    compare_sides(side(dataset, earlier), side(dataset, later))
+}
+
+/// The comparison of two measured windows, whether they were just read or restored from a capture.
+pub(crate) fn compare_sides(a: Side, b: Side) -> Comparison {
     let both_reliable = a.facts.reliable && b.facts.reliable;
     let verdict = if a.facts.requests == 0 || b.facts.requests == 0 {
         "no_data"

@@ -80,6 +80,7 @@ pub struct Report<'a> {
     pub subagents: Option<&'a agentmeter_core::subagents::SubagentReport>,
     pub skills: Option<&'a agentmeter_core::skills::SkillAnalysis>,
     pub compaction_causes: Option<&'a agentmeter_core::compaction::CausesReport>,
+    pub before_after: Option<&'a agentmeter_core::before_after::BeforeAfter>,
 }
 
 /// Widest the text gets, also in a wider terminal or a pipe; bars are at most [`BAR`] cells.
@@ -205,6 +206,9 @@ pub fn text(report: &Report, style: Style) -> String {
     if let Some(c) = report.compare {
         out += &compare_text(c, style);
     }
+    if let Some(b) = report.before_after {
+        out += &before_after_text(b, style);
+    }
     if let Some(t) = report.transitions {
         out += &transitions_text(t, style);
     }
@@ -256,8 +260,31 @@ fn compare_value(name: &str, value: Option<f64>) -> String {
     }
 }
 
+fn before_after_text(b: &agentmeter_core::before_after::BeforeAfter, style: Style) -> String {
+    let mut out = heading(style, "BEFORE AND AFTER");
+    let change = match &b.label {
+        Some(label) => format!("{} ({label})", &b.change_point[..10]),
+        None => b.change_point[..10].to_owned(),
+    };
+    out += &wrap(
+        style,
+        &format!("{change} · {} days each side", count(b.period_days as u64)),
+        "  change     ",
+        "             ",
+        13,
+    );
+    out += &wrap(style, b.notice, "  note       ", "             ", 13);
+    out += &compare_body(&b.comparison, style);
+    out
+}
+
 fn compare_text(c: &agentmeter_core::compare::Comparison, style: Style) -> String {
-    let mut out = heading(style, "COMPARISON");
+    let out = heading(style, "COMPARISON");
+    out + &compare_body(c, style)
+}
+
+fn compare_body(c: &agentmeter_core::compare::Comparison, style: Style) -> String {
+    let mut out = String::new();
     out += &wrap(style, c.method, "  method     ", "             ", 13);
     for (name, w) in [("earlier", &c.earlier), ("later  ", &c.later)] {
         out += &wrap(
@@ -2115,12 +2142,97 @@ fn json_source(report: &Report) -> Value {
     if let Some(v) = report.compaction_causes {
         put("compaction_causes", json!(v));
     }
+    if let Some(v) = report.before_after {
+        put("before_after", json!(v));
+    }
     if let Some(v) = report.findings {
         put("verdict", json!(v.verdict));
         put("findings", json!(v.findings));
         put("rules", json!(v.rules));
     }
     root
+}
+
+/// `--compare-captures`: the two captures side by side, or why they cannot be compared.
+pub fn capture_comparison_text(
+    c: &agentmeter_core::capture::CaptureComparison,
+    style: Style,
+) -> String {
+    let mut out = heading(style, "CAPTURE COMPARISON");
+    for (name, r) in [("earlier", &c.earlier), ("later  ", &c.later)] {
+        let label = r
+            .label
+            .as_ref()
+            .map_or(String::new(), |l| format!(" ({l})"));
+        out += &wrap(
+            style,
+            &format!("{}{label} · made {}", r.name, r.created),
+            &format!("  {name}    "),
+            "             ",
+            13,
+        );
+    }
+    match (&c.comparison, &c.reason) {
+        (Some(comparison), _) => out += &compare_body(comparison, style),
+        (None, reason) => {
+            out += "\n";
+            out += &wrap(
+                style,
+                &format!(
+                    "not comparable: {}",
+                    reason.as_deref().unwrap_or("unknown reason")
+                ),
+                "  note  ",
+                "        ",
+                8,
+            );
+        }
+    }
+    out
+}
+
+/// `--captures`: one line per stored capture, and files that could not be read.
+pub fn captures_text(
+    dir: &str,
+    captures: &[agentmeter_core::capture::Capture],
+    unreadable: &[(String, String)],
+    style: Style,
+) -> String {
+    let mut out = heading(style, "CAPTURES");
+    out += &wrap(style, dir, "  stored in  ", "             ", 13);
+    if captures.is_empty() && unreadable.is_empty() {
+        out += "  none\n";
+    }
+    for c in captures {
+        let label = c
+            .label
+            .as_ref()
+            .map_or(String::new(), |l| format!(" ({l})"));
+        out += &wrap(
+            style,
+            &format!(
+                "{}{label} · {} · {} to {} · {} requests",
+                c.name,
+                c.tool,
+                &c.facts.from[..10],
+                &c.facts.to[..10],
+                count(c.facts.requests)
+            ),
+            "  ",
+            "    ",
+            2,
+        );
+    }
+    for (name, reason) in unreadable {
+        out += &wrap(
+            style,
+            &format!("{name}: not read, {reason}"),
+            "  ",
+            "    ",
+            2,
+        );
+    }
+    out
 }
 
 #[cfg(test)]

@@ -101,6 +101,26 @@ are uncalibrated. Unknown triggers and sizes stay unknown (always for Codex). Wi
 2.1.288 or later; `autoCompactEnabled`) is compared with the median size before automatic
 compactions; the setting is today's content of the files and is never claimed for the past.
 
+## Before and after a change
+
+`--changed-on <date>` is the same view as `--compare` with the windows set by the user: the period
+from the given day to now, and an equally long period before that day. The day is never guessed
+and the report does not know what changed (`--change-label` only echoes the user's name). All
+figures, the reliability threshold and the model and front-end limitations are those of
+`--compare`. A difference between the periods is not attributed to the change: other tasks,
+models or front ends, and short periods, move the numbers too, and less or more input is not
+better or worse work. Today's `--probe` values are not part of it and are never read as an earlier
+configuration; nothing is stored, so no earlier configuration can be recovered from this view.
+
+## Captures
+
+`--capture <name> --since <period>` stores the `--compare` figures of one source and period in a
+local file, so a later period can be compared without the old logs; `--compare-captures` runs the
+same comparison on two files and adds a limitation when their periods overlap. Captures made with
+other rule versions, for another source or for another project are not compared; the reason is
+stated and no figure is. A missing baseline is an error. `--probe` values are never kept or
+assigned to an earlier capture. Format and location: `reference/json.md`.
+
 ## Tool-call rules
 
 Only with `--tool-calls`. Each observation carries the period, the sample, counter-examples that

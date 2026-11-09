@@ -38,6 +38,7 @@ list under it names every field of that object. The tests compare these lists wi
 - `compare` — only with `--compare`: two periods side by side with change and denominators.
 - `subagents` — only with `--subagents`: direct and delegated usage per session, overlapping runs and shared files.
 - `compaction_causes` — only with `--compaction-causes` or `--compaction-settings`: compactions by project, model and session with hints at the lever, and with the second flag today's auto-compact setting.
+- `before_after` — only with `--changed-on`: the period before a change date next to the period since it.
 - `tool_calls` — only with `--tool-calls`: repeated reads, repeated failures and large outputs, from tool calls and results.
 - `instructions` — only with `--instructions <dir>`: the instruction files that apply to that directory for this agent.
 - `skills` — only with `--skills`: installed skills called and not observed in the period, with the size of their entries in the session-start skill list.
@@ -556,6 +557,30 @@ One entry per project and model with compactions. The window that applies today 
 - `fit` — `within` (median 70 to 105 percent of the window), `below`, `above`, `no_setting`, `auto_value` or `not_measurable`; the limits are uncalibrated.
 - `message` — the comparison in words, marked as today's setting.
 
+### `sources[].before_after`
+
+The period from the date the user gave up to now (`later`) against an equally long period ending
+at that date (`earlier`), computed by the same function as `compare`. The date is the user's;
+nothing is detected. A difference is shown, never attributed to the change.
+
+- `change_point` — the given day, 00:00 UTC.
+- `label` — the user's name for the change (`--change-label`), otherwise `null`.
+- `period_days` — calendar days each period covers; `0` when the date is not in the past.
+- `notice` — in words: the difference is no effect of the change.
+- `comparison` — the comparison of the two periods.
+
+### `sources[].before_after.comparison`
+
+Same content as `sources[].compare`, including its objects `earlier`, `later`, `metrics[]` and
+`limitations[]`.
+
+- `verdict` — `compared`, `not_reliable` or `no_data`, as in `compare`.
+- `method` — how the figures are made, in words.
+- `earlier` — the period before the change date.
+- `later` — the period from the change date to now.
+- `metrics` — the figures, in a fixed order.
+- `limitations` — what limits the comparison, among them model and front-end shifts and periods that are too short.
+
 ### `sources[].tool_calls`
 
 Opt-in: message content is opened for call ids, tool names, file paths of file tools, a hash of
@@ -702,3 +727,43 @@ equated. Codex logs no skill calls: its `status` is `not_measurable` and nothing
 The exit status is `0` if all sources passed, `1` if one failed (unreadable lines or compressed
 files over the limits, or no usage in the selected period) and `2` for a bad call. Notices and info
 from the rules never fail the check.
+
+## Captures
+
+`--capture <name> --since <period>` writes the figures of that period, up to now, of one source to
+a local file; nothing is written unless you ask. The figures are the ones of `--compare`. A capture
+holds aggregated numbers and labels (model and front-end names, project filter, your change
+label), never conversation, source code, tool calls, session or message ids, or configuration
+text. Values from `--probe` are not part of it.
+
+- Location: `$AGENTMETER_DATA_DIR/captures`, else `$XDG_DATA_HOME/agentmeter/captures`, else `~/.local/share/agentmeter/captures`; one file `<name>.json` per capture. A name has letters, digits, `-`, `_` and `.`, up to 64, and does not start with a dot.
+- `--capture` does not overwrite; `--delete-capture <name>` removes the file, deleting the file by hand works as well. `--captures` lists them, `--compare-captures <earlier> <later>` compares two.
+- A file with another `schema_version` than this version reads is listed as unreadable and is not compared.
+
+#### Capture file
+
+Pretty-printed JSON, also what `--capture --json` prints.
+
+- `schema_version` — layout version of the file, `1`.
+- `name` — the name it is stored under.
+- `label` — your name for a change (`--change-label`), otherwise `null`.
+- `created` — when it was made (UTC).
+- `tool` — `claude` or `codex`.
+- `project` — the `--project` filter, otherwise `null`.
+- `rules` — version of each rule whose figure is kept (`baseline-load`, `cache-rebuild`).
+- `data_quality` — `files`, `skipped_lines`, `files_without_usage`, `compressed_files_unreadable` and `analysable` of the source when it was made.
+- `facts` — the period as in `sources[].compare.earlier`.
+- `figures` — per figure of `sources[].compare.metrics[]`: `name`, `value` (`null` where it could not be computed), `denominator` and `note`.
+
+#### `--compare-captures --json`
+
+An object with `schema_version` and `capture_comparison`:
+
+- `comparable` — `false` when the captures are from different sources, projects or rule versions; no figure is given then.
+- `reason` — why not, otherwise `null`.
+- `earlier` and `later` — `name`, `label`, `created` of each capture.
+- `comparison` — as `sources[].compare` (same rules, thresholds and limitations; a `windows-overlap` limitation is added when the periods overlap), or `null` when not comparable.
+
+#### `--captures --json`
+
+An object with `schema_version`, `directory`, `captures` (`name`, `label`, `created`, `tool`, `project`, `from`, `to`, `requests`) and `unreadable` (`name` and `reason`).

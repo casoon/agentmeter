@@ -287,6 +287,10 @@ fn documented_json_fields_equal_the_real_ones() {
             "--subagents",
             "--skills",
             "--compaction-settings",
+            "--changed-on",
+            "2026-10-01",
+            "--change-label",
+            "new rules",
             "--instructions",
             fixtures().join("instr/claude/repo").to_str().unwrap(),
         ],
@@ -295,7 +299,7 @@ fn documented_json_fields_equal_the_real_ones() {
     assert_eq!(v["schema_version"], 1);
     let documented = documented_fields();
     assert!(
-        documented.len() == 55,
+        documented.len() == 57,
         "the doc lists the objects: {documented:?}"
     );
     for (path, fields) in &documented {
@@ -1307,6 +1311,69 @@ fn codex_subagents_follow_spawn_records_through_nested_delegation_and_keep_unkno
 }
 
 #[test]
+fn changed_on_compares_equal_periods_and_never_names_a_cause() {
+    use agentmeter_core::time::{DAY_MS, format_iso};
+    let dir = compare_config("changed-on");
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64;
+    // Seven days ago, midnight UTC: the days with logs before it are 8 to 11 days ago.
+    let day = format_iso(now - 7 * DAY_MS)[..10].to_owned();
+    let v = json_of(
+        &dir,
+        &[
+            "--changed-on",
+            &day,
+            "--change-label",
+            "new rules",
+            "--json",
+        ],
+    );
+    let b = &v["sources"][0]["before_after"];
+    assert_eq!(b["label"], "new rules");
+    assert!(b["change_point"].as_str().unwrap().starts_with(&day));
+    assert!(b["notice"].as_str().unwrap().contains("not an effect"));
+    assert_eq!(
+        b["comparison"]["earlier"]["to"],
+        b["comparison"]["later"]["from"]
+    );
+    assert!(b["comparison"]["metrics"].as_array().unwrap().len() == 8);
+    // The model changed completely: a limitation, whatever the numbers did.
+    let kinds: Vec<&str> = b["comparison"]["limitations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|l| l["kind"].as_str().unwrap())
+        .collect();
+    assert!(kinds.contains(&"model-mix"), "{kinds:?}");
+    // Opt-in: the default output has no such key.
+    let plain = json_of(&dir, &["--json"]);
+    assert!(plain["sources"][0].get("before_after").is_none());
+    // A date with no logs before it: unknown values, no change.
+    let v = json_of(&dir, &["--changed-on", "2020-01-01", "--json"]);
+    let c = &v["sources"][0]["before_after"]["comparison"];
+    assert_eq!(c["verdict"], "no_data");
+    assert!(
+        c["metrics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|m| m["change"].is_null())
+    );
+    let text = String::from_utf8(run_dir(&dir, &["--changed-on", &day]).stdout).unwrap();
+    assert!(text.contains("BEFORE AND AFTER") && text.contains("not an effect"));
+    for line in text.lines() {
+        assert!(line.chars().count() <= 88, "{line}");
+    }
+    assert_eq!(
+        run_dir(&dir, &["--changed-on", "7d"]).status.code(),
+        Some(2)
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
 fn skills_json_counts_calls_and_keeps_skill_content_out() {
     let output = run("epoch-current", &["--skills", "--json"]);
     assert!(output.status.success());
@@ -1590,4 +1657,147 @@ fn codex_compaction_causes_keep_trigger_unknown_and_read_no_settings() {
             .iter()
             .any(|n| n.as_str().unwrap().contains("not read for this agent"))
     );
+}
+
+fn capture_run(config: &std::path::Path, store: &std::path::Path, args: &[&str]) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_agentmeter"))
+        .args(args)
+        .env("CLAUDE_CONFIG_DIR", config)
+        .env("CODEX_HOME", fixtures().join("does-not-exist"))
+        .env("AGENTMETER_DATA_DIR", store)
+        .env_remove("NO_COLOR")
+        .output()
+        .unwrap()
+}
+
+#[test]
+fn captures_are_made_listed_compared_and_deleted_on_request_only() {
+    let dir = compare_config("capture");
+    let store = dir.join("data");
+    let json = |args: &[&str]| -> serde_json::Value {
+        let out = capture_run(&dir, &store, args);
+        assert!(
+            out.status.success(),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        serde_json::from_slice(&out.stdout).unwrap()
+    };
+    // Nothing is stored unless asked for.
+    json(&["--json"]);
+    assert!(!store.exists());
+    assert_eq!(
+        json(&["--captures", "--json"])["captures"]
+            .as_array()
+            .unwrap()
+            .len(),
+        0
+    );
+
+    let old = json(&[
+        "--capture",
+        "old",
+        "--since",
+        "12d",
+        "--change-label",
+        "before",
+        "--json",
+    ]);
+    json(&["--capture", "new", "--since", "6d", "--json"]);
+    assert_eq!(old["schema_version"], 1);
+    assert_eq!(old["facts"]["requests"], 360);
+    // Numbers only: the file holds no text of the logs.
+    let text = std::fs::read_to_string(store.join("captures/old.json")).unwrap();
+    assert!(
+        !text.contains("s8") && !text.contains("m8-0"),
+        "no session or message ids"
+    );
+    let doc = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/reference/json.md"),
+    )
+    .unwrap();
+    for key in old.as_object().unwrap().keys() {
+        assert!(doc.contains(&format!("`{key}`")), "{key} is documented");
+    }
+    // Never overwritten, never without a period.
+    assert!(
+        !capture_run(&dir, &store, &["--capture", "old", "--since", "6d"])
+            .status
+            .success()
+    );
+    assert_eq!(
+        capture_run(&dir, &store, &["--capture", "x"]).status.code(),
+        Some(2)
+    );
+
+    let list = json(&["--captures", "--json"]);
+    let names: Vec<&str> = list["captures"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["new", "old"]);
+
+    let v = json(&["--compare-captures", "old", "new", "--json"]);
+    let c = &v["capture_comparison"];
+    assert_eq!(c["comparable"], true);
+    assert_eq!(c["earlier"]["label"], "before");
+    assert_eq!(c["comparison"]["earlier"]["requests"], 360);
+    assert_eq!(c["comparison"]["later"]["requests"], 240);
+    let kinds: Vec<&str> = c["comparison"]["limitations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|l| l["kind"].as_str().unwrap())
+        .collect();
+    assert!(kinds.contains(&"windows-overlap"), "{kinds:?}");
+    let text =
+        String::from_utf8(capture_run(&dir, &store, &["--compare-captures", "old", "new"]).stdout)
+            .unwrap();
+    assert!(text.contains("CAPTURE COMPARISON") && text.contains("requests per active day"));
+
+    // A rule version from another release: not comparable, with the reason, no figures.
+    let path = store.join("captures/new.json");
+    let edited = std::fs::read_to_string(&path)
+        .unwrap()
+        .replace("\"baseline-load\": 1", "\"baseline-load\": 9");
+    std::fs::write(&path, edited).unwrap();
+    let c = json(&["--compare-captures", "old", "new", "--json"]);
+    assert_eq!(c["capture_comparison"]["comparable"], false);
+    assert!(c["capture_comparison"]["comparison"].is_null());
+    assert!(
+        c["capture_comparison"]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("rule versions")
+    );
+
+    // A schema this version does not read is reported, not compared.
+    std::fs::write(
+        &path,
+        std::fs::read_to_string(&path)
+            .unwrap()
+            .replace("\"schema_version\": 1", "\"schema_version\": 2"),
+    )
+    .unwrap();
+    let list = json(&["--captures", "--json"]);
+    assert_eq!(list["unreadable"][0]["name"], "new");
+    assert!(
+        !capture_run(&dir, &store, &["--compare-captures", "old", "new"])
+            .status
+            .success()
+    );
+    // A missing baseline is an error with its name.
+    let out = capture_run(&dir, &store, &["--compare-captures", "missing", "old"]);
+    assert!(String::from_utf8_lossy(&out.stderr).contains("no capture `missing`"));
+
+    json(&["--delete-capture", "old", "--json"]);
+    assert!(!store.join("captures/old.json").exists());
+    assert!(
+        !capture_run(&dir, &store, &["--delete-capture", "old"])
+            .status
+            .success()
+    );
+    let _ = std::fs::remove_dir_all(dir);
 }

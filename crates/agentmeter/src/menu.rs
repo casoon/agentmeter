@@ -242,6 +242,7 @@ fn detail(id: &str, views: &[View], period: &str, style: Style) -> String {
                 subagents: None,
                 skills: None,
                 compaction_causes: None,
+                before_after: None,
             };
             render::text(&report, style)
         })

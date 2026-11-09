@@ -3,6 +3,7 @@
 //! Reads the local Claude Code and Codex CLI session logs and reports totals and findings.
 //! Read-only.
 
+mod captures;
 mod cli;
 mod menu;
 mod render;
@@ -80,6 +81,8 @@ pub struct Analysis {
     pub skills: Option<agentmeter_core::skills::SkillAnalysis>,
     /// What `--compaction-causes` found.
     pub compaction_causes: Option<agentmeter_core::compaction::CausesReport>,
+    /// What `--changed-on` found.
+    pub before_after: Option<agentmeter_core::before_after::BeforeAfter>,
 }
 
 pub fn read_sources(tool: Tool) -> Vec<Source> {
@@ -149,6 +152,14 @@ pub fn analyse(source: &Source, options: &Options, now_ms: i64, probe: Option<Pr
         compare: options.compare.map(|days| {
             let (earlier, later) = agentmeter_core::compare::windows_before(now_ms, days);
             agentmeter_core::compare::compare(dataset, earlier, later)
+        }),
+        before_after: options.changed_on.map(|change_ms| {
+            agentmeter_core::before_after::before_after(
+                dataset,
+                change_ms,
+                options.change_label.as_deref(),
+                now_ms,
+            )
         }),
         transitions: options.transitions.then(|| {
             // Tool calls read only for `--skills` do not feed the timeline.
@@ -274,7 +285,16 @@ pub fn run_probe(
     agentmeter_claude::probe::run(&places)
 }
 
+pub fn now_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as i64)
+}
+
 fn run(options: &Options, interactive: bool) -> ExitCode {
+    if let Some(code) = captures::store_action(options) {
+        return code;
+    }
     let instructions_dir = match options.instructions.as_deref().map(Path::new) {
         Some(dir) if !dir.is_dir() => {
             eprintln!(
@@ -352,6 +372,9 @@ fn run(options: &Options, interactive: bool) -> ExitCode {
         eprintln!("agentmeter: no project matches `{name}`");
         return ExitCode::FAILURE;
     }
+    if let Some(cli::CaptureAction::Save(name)) = &options.capture {
+        return captures::save(&sources, options, name);
+    }
     if let Some(Check::DataQuality) = options.check {
         return run_check(&sources, &analyses, options.json);
     }
@@ -377,6 +400,7 @@ fn run(options: &Options, interactive: bool) -> ExitCode {
             subagents: a.subagents.as_ref(),
             skills: a.skills.as_ref(),
             compaction_causes: a.compaction_causes.as_ref(),
+            before_after: a.before_after.as_ref(),
         })
         .collect();
     if options.json {
