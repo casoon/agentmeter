@@ -74,6 +74,8 @@ pub struct Analysis {
     pub transitions: Option<agentmeter_core::transitions::TransitionReport>,
     /// What `--compare` found.
     pub compare: Option<agentmeter_core::compare::Comparison>,
+    /// What `--subagents` found.
+    pub subagents: Option<agentmeter_core::subagents::SubagentReport>,
 }
 
 pub fn read_sources(tool: Tool) -> Vec<Source> {
@@ -147,6 +149,9 @@ pub fn analyse(source: &Source, options: &Options, now_ms: i64, probe: Option<Pr
         transitions: options.transitions.then(|| {
             agentmeter_core::transitions::analyse(dataset, source.tools.as_ref(), since_ms)
         }),
+        subagents: options
+            .subagents
+            .then(|| agentmeter_core::subagents::analyse(dataset, source.tools.as_ref(), since_ms)),
         tool_calls: source
             .tools
             .as_ref()
@@ -344,6 +349,7 @@ fn run(options: &Options, interactive: bool) -> ExitCode {
             tool_calls: a.tool_calls.as_ref(),
             transitions: a.transitions.as_ref(),
             compare: a.compare.as_ref(),
+            subagents: a.subagents.as_ref(),
         })
         .collect();
     if options.json {

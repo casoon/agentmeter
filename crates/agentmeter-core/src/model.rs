@@ -117,6 +117,20 @@ pub struct SessionStart {
     pub parent: Option<String>,
 }
 
+/// A delegated agent's log file and the parent the log names for it. `parent` is `None` when the
+/// log does not name one: the agent then stays unassigned, never guessed from project or time.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct AgentLink {
+    pub source: usize,
+    /// Id of the agent's own thread (Codex) or its log file name (Claude Code).
+    pub agent: String,
+    /// Id of the session or agent that delegated to it.
+    pub parent: Option<String>,
+    /// Where the log names the parent: `session_folder`, `spawn_record`, `fork_record` or
+    /// `copied_history`.
+    pub basis: Option<&'static str>,
+}
+
 /// What the agent itself reports it would send at the start of a session in one directory
 /// (Claude Code `/context`). Estimates by the agent, not counted from a log.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -177,6 +191,8 @@ pub struct Dataset {
     /// Log files read, relative to the projects directory; `source` indexes into this.
     pub files: Vec<String>,
     pub session_starts: Vec<SessionStart>,
+    /// Delegated agents' log files with the parent the log names.
+    pub agent_links: Vec<AgentLink>,
     pub stats: ReadStats,
 }
 

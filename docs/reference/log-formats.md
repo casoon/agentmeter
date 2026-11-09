@@ -15,7 +15,8 @@ Location: `~/.claude/projects/<project>/<session>.jsonl`, sub-agents in `subagen
 - The same response can appear more than once, so entries are deduplicated by message id and
   request id.
 - Compactions are `system` entries with `compactMetadata` (trigger and tokens before).
-- Entries marked as sidechain belong to a sub-agent.
+- Entries marked as sidechain belong to a sub-agent. With `--subagents`, the folder name before
+  `subagents/` is the agent's named parent; an agent log outside a session folder has none.
 - With `--tool-calls` only: `tool_use` blocks of assistant messages (id, name, file path or a
   hash of the command) and `tool_result` blocks of user messages (id, `is_error`, size of the
   text). Streaming copies and sub-agent replays repeat a call id and are merged.
@@ -32,6 +33,9 @@ Location: `~/.codex/sessions/` and `~/.codex/archived_sessions/`.
 - Repeated events with unchanged totals occur, so deltas of the cumulative total are used.
   Summing the last call instead would count them twice.
 - Replayed parent history in sub-agent rollouts is not counted twice.
+- With `--subagents`, a sub-agent's parent is the `parent_thread_id` of `source.subagent.thread_spawn`
+  (read from the format as expected, not yet checked against a live log), else `forked_from_id`,
+  else the first other thread id in a copied `session_meta`; the report names which one was used.
 - Cache writes are read only where the field exists (newer versions) and carries a value above 0;
   otherwise they are "not measured", never zero.
 - Compactions appear as `compacted` entries with a response id. The trigger and the size after

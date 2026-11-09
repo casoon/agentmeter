@@ -77,6 +77,7 @@ pub struct Report<'a> {
     pub tool_calls: Option<&'a ToolAnalysis>,
     pub transitions: Option<&'a agentmeter_core::transitions::TransitionReport>,
     pub compare: Option<&'a agentmeter_core::compare::Comparison>,
+    pub subagents: Option<&'a agentmeter_core::subagents::SubagentReport>,
 }
 
 /// Widest the text gets, also in a wider terminal or a pipe; bars are at most [`BAR`] cells.
@@ -204,6 +205,9 @@ pub fn text(report: &Report, style: Style) -> String {
     }
     if let Some(t) = report.transitions {
         out += &transitions_text(t, style);
+    }
+    if let Some(s) = report.subagents {
+        out += &subagents_text(s, style);
     }
     if let Some(tools) = report.tool_calls {
         out += &tool_calls_text(tools, style);
@@ -426,6 +430,249 @@ fn transitions_text(r: &agentmeter_core::transitions::TransitionReport, style: S
         out += &evidence_text(style, &t.file, t.event.as_deref().unwrap_or("-"));
     }
     out += "\n";
+    for n in &r.notes {
+        out += &wrap(style, n, "  note  ", "        ", 8);
+    }
+    out
+}
+
+fn usage_line(u: &agentmeter_core::subagents::Usage) -> String {
+    let mut models: Vec<(&String, &u64)> = u.models.iter().collect();
+    models.sort_by_key(|(name, n)| (std::cmp::Reverse(**n), (*name).clone()));
+    let mix: Vec<String> = models
+        .iter()
+        .take(3)
+        .map(|(name, n)| format!("{} {}", clip(name, 24), count(**n)))
+        .collect();
+    format!(
+        "{} requests · input {} (fresh {} · cached {} · written {}) · models {}",
+        count(u.requests),
+        tokens(u.input),
+        tokens(u.fresh),
+        tokens(u.cache_read),
+        tokens(u.cache_write),
+        if mix.is_empty() {
+            "-".to_owned()
+        } else {
+            mix.join(", ")
+        }
+    )
+}
+
+fn optional_count(value: Option<u64>) -> String {
+    value.map_or("not measurable".to_owned(), count)
+}
+
+/// A length of time; zero is "none", since a run of one request has no observed length.
+fn run_length(ms: i64) -> String {
+    if ms == 0 {
+        "none".to_owned()
+    } else {
+        duration(ms)
+    }
+}
+
+fn subagents_text(r: &agentmeter_core::subagents::SubagentReport, style: Style) -> String {
+    let mut out = heading(style, "SUBAGENTS");
+    out += &wrap(style, r.method, "  method     ", "             ", 13);
+    let c = &r.counts;
+    out += &wrap(
+        style,
+        &format!(
+            "{} sessions · {} delegated · {} agents (deepest chain {}, {} nested) · {} without a named parent",
+            count(c.sessions),
+            count(c.sessions_with_agents),
+            count(c.agents),
+            c.max_depth,
+            count(c.nested_agents),
+            count(c.unassigned_agents)
+        ),
+        "  observed   ",
+        "             ",
+        13,
+    );
+    let t = &r.totals;
+    out += &wrap(
+        style,
+        &format!(
+            "of {} requests: {} direct · {} by agents with a named parent · {} by agents without",
+            count(t.requests),
+            count(t.direct.requests),
+            count(t.delegated.requests),
+            count(t.unassigned.requests)
+        ),
+        "  split      ",
+        "             ",
+        13,
+    );
+    out += "\n";
+    for root in r.roots.iter().take(TABLE_ROWS) {
+        out += &format!(
+            "  {} · {}{}\n",
+            style.bold(&clip(&root.session, 36)),
+            clip(&root.project, 28),
+            if root.in_logs {
+                ""
+            } else {
+                " · session log not read"
+            }
+        );
+        out += &wrap(
+            style,
+            &format!("direct   {}", usage_line(&root.direct)),
+            "    ",
+            "             ",
+            4,
+        );
+        out += &wrap(
+            style,
+            &format!("agents   {}", usage_line(&root.delegated)),
+            "    ",
+            "             ",
+            4,
+        );
+        out += &wrap(
+            style,
+            &format!(
+                "{} agents, chain depth {} · input with agents {} (derived, not a total)",
+                count(root.agents),
+                root.max_depth,
+                tokens(root.inclusive_input)
+            ),
+            "    ",
+            "    ",
+            4,
+        );
+        out += &wrap(
+            style,
+            &format!(
+                "{} runs · span {} · inside runs {} · paused {} (run length includes waiting)",
+                count(root.runs),
+                run_length(root.span_ms),
+                run_length(root.active_ms),
+                run_length(root.paused_ms)
+            ),
+            "    ",
+            "    ",
+            4,
+        );
+        if let Some(s) = &root.start_context {
+            out += &wrap(
+                style,
+                &format!(
+                    "first requests of {} agents sent {} (cached {} · written {}); a measure, not a verdict",
+                    count(s.agents),
+                    tokens(s.context),
+                    tokens(s.cache_read),
+                    tokens(s.cache_write)
+                ),
+                "    ",
+                "    ",
+                4,
+            );
+        }
+        if r.file_data {
+            out += &wrap(
+                style,
+                &format!(
+                    "files: {} areas read by several · {} written by several · {} read at other lines only",
+                    optional_count(root.shared_reads),
+                    optional_count(root.shared_writes),
+                    optional_count(root.shared_reads_other_ranges)
+                ),
+                "    ",
+                "    ",
+                4,
+            );
+            for e in &root.shared_examples {
+                out += &wrap(style, e, "    · ", "      ", 6);
+            }
+        }
+        for child in root.children.iter().take(3) {
+            out += &wrap(
+                style,
+                &format!(
+                    "agent {} (depth {}, parent {} via {}): {} requests, input {}",
+                    child.agent.as_deref().unwrap_or("unknown"),
+                    child.depth.map_or("?".to_owned(), |d| d.to_string()),
+                    child.parent.as_deref().unwrap_or("unknown"),
+                    child.parent_basis.unwrap_or("-"),
+                    count(child.usage.requests),
+                    tokens(child.usage.input)
+                ),
+                "    · ",
+                "      ",
+                6,
+            );
+        }
+        if let Some(first) = root.children.first() {
+            out += &evidence_text(style, &first.file, &first.first);
+        }
+        out += "\n";
+    }
+    if !r.unassigned.is_empty() {
+        out += &format!(
+            "  without a named parent ({}):\n",
+            count(r.unassigned.len() as u64)
+        );
+        for child in r.unassigned.iter().take(5) {
+            out += &wrap(
+                style,
+                &format!(
+                    "{}: {} requests, input {}",
+                    child.agent.as_deref().unwrap_or("unknown agent"),
+                    count(child.usage.requests),
+                    tokens(child.usage.input)
+                ),
+                "    · ",
+                "      ",
+                6,
+            );
+            out += &evidence_text(style, &child.file, &child.first);
+        }
+        out += "\n";
+    }
+    if !r.overlaps.is_empty() {
+        out += &format!(
+            "  overlapping runs: {} with a delegation, {} agents of one session, {} in time only\n",
+            count(c.overlaps_delegation),
+            count(c.overlaps_same_task),
+            count(c.overlaps_time_only)
+        );
+        for o in r.overlaps.iter().take(5) {
+            let relation = match o.relation {
+                "delegation" => "delegation",
+                "same_task" => "same session",
+                _ => "time only",
+            };
+            out += &wrap(
+                style,
+                &format!(
+                    "{} + {} · {} · {}{}",
+                    clip(&o.first, 28),
+                    clip(&o.second, 28),
+                    relation,
+                    if o.overlap_ms == 0 {
+                        "at one request time".to_owned()
+                    } else {
+                        format!("{} together", duration(o.overlap_ms))
+                    },
+                    o.shared_writes.map_or(String::new(), |w| format!(
+                        " · {} files written by both, {} areas read by both",
+                        count(w),
+                        count(o.shared_reads.unwrap_or(0))
+                    ))
+                ),
+                "    · ",
+                "      ",
+                6,
+            );
+        }
+        out += "\n";
+    }
+    for e in &r.counterexamples {
+        out += &wrap(style, e, "  counter  ", "           ", 11);
+    }
     for n in &r.notes {
         out += &wrap(style, n, "  note  ", "        ", 8);
     }
@@ -1511,6 +1758,9 @@ fn json_source(report: &Report) -> Value {
     }
     if let Some(v) = report.compare {
         put("compare", json!(v));
+    }
+    if let Some(v) = report.subagents {
+        put("subagents", json!(v));
     }
     if let Some(v) = report.findings {
         put("verdict", json!(v.verdict));

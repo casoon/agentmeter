@@ -61,6 +61,8 @@ pub struct Options {
     pub transitions: bool,
     /// Compare the last N days with the N days before them.
     pub compare: Option<i64>,
+    /// Consumption of main sessions and delegated agents, overlap, shared files.
+    pub subagents: bool,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -115,6 +117,7 @@ where
                 },
                 None => return Invocation::Error("--compare needs a period like 7d".to_owned()),
             },
+            "--subagents" => options.subagents = true,
             "--probe" => {
                 options.probe = true;
                 options.findings = true;
@@ -174,7 +177,8 @@ where
         || options.instructions.is_some()
         || options.tool_calls
         || options.transitions
-        || options.compare.is_some())
+        || options.compare.is_some()
+        || options.subagents)
     {
         options.summary = true;
     }
@@ -226,6 +230,10 @@ Options:
                          denominators. Windows with too few days or requests get no change;
                          model and front-end shifts are named. Shows changes, never causes.
                          Does not combine with --since; --project and --tool apply.
+      --subagents        Consumption of main sessions and of the agents they delegated to,
+                         only where the log names the parent; runs that overlapped in time;
+                         with --tool-calls files several agents read or wrote. Metadata only;
+                         an overlap is a reason to look, not a conflict.
       --json             Print JSON instead of text (schema: docs/reference/json.md)
       --check <name>     data-quality: exit 1 if a source has unreadable data or none to
                          analyse, 0 otherwise, 2 for a bad call. Findings never fail it.
@@ -351,6 +359,14 @@ mod tests {
             panic!("expected a run");
         };
         assert_eq!(options.compare, None);
+    }
+
+    #[test]
+    fn subagents_is_a_flag_of_its_own() {
+        let Invocation::Run(options) = run(&["--subagents"]) else {
+            panic!("expected a run");
+        };
+        assert!(options.subagents && !options.summary && !options.tool_calls);
     }
 
     #[test]

@@ -110,6 +110,7 @@ agentmeter --findings          # rules with conclusion, measure, evidence and ne
 agentmeter --probe             # also ask Claude Code what a session start holds (see below)
 agentmeter --compare 7d         # the last 7 days next to the 7 days before (see below)
 agentmeter --transitions        # starts, resumes, compactions, pauses as a timeline (see below)
+agentmeter --subagents         # direct vs delegated usage, overlapping runs, shared files (see below)
 agentmeter --tool-calls        # also read tool calls: repeated reads/failures, large outputs (see below)
 agentmeter --instructions .  # the instruction files that apply to a directory (see below)
 agentmeter --tool codex        # claude, codex or all (default)
@@ -162,6 +163,24 @@ with fewer than 3 active days or 100 requests is shown without a change, and a s
 or front ends between the windows is listed as a limitation. A figure the logs cannot give stays
 unknown. A change is shown, not explained, and less or more input is not better or worse work.
 `--project` and `--tool` apply; `--since` does not combine with it.
+
+## Subagents: `--subagents`
+
+Splits the usage of each session into its own requests and those of the agents it delegated to
+(fresh, cached and written input and the model mix, apart), including chains of agents. An agent
+is assigned only where the log names its parent: Claude Code by the session folder of the agent's
+log, Codex by the spawn record, the fork id or the parent history copied into the rollout (the
+weakest, marked as such). Project name and closeness in time never link; an agent without a named
+parent is listed apart and added to no session. The parts add up to the requests and input of the
+summary, and the input "with agents" is derived, never added again.
+
+It also lists pairs of streams that were active at once, told apart as delegation, agents of one
+session, or time only (two independent chats). The logs hold no run time, so a run is a stretch of
+requests less than an hour apart, its length still contains waiting, and a run of one request has
+no observed length. With `--tool-calls` it adds files that several agents read or wrote, during
+the overlap too, with other line ranges as counter-example (Codex logs no file targets, so there it
+says so). An overlap or a shared file is a reason to look, not a conflict, and nothing here
+promises time saved by running agents in parallel or calls delegation inefficient.
 
 ## Tool calls: `--tool-calls`
 
