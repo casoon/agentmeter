@@ -39,6 +39,8 @@ pub enum Check {
 
 /// Values `--check` accepts, for the error message.
 const CHECKS: &str = "data-quality";
+const CAPTURE_NAME: &str =
+    "a capture name has letters, digits, - _ . only, up to 64, and does not start with a dot";
 
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Options {
@@ -59,6 +61,39 @@ pub struct Options {
     pub tool_calls: bool,
     /// Timeline of starts, resumes, compactions and pauses.
     pub transitions: bool,
+    /// Compare the last N days with the N days before them.
+    pub compare: Option<i64>,
+    /// Consumption of main sessions and delegated agents, overlap, shared files.
+    pub subagents: bool,
+    /// Called and uncalled skills with their share of the session-start skill list.
+    pub skills: bool,
+    /// Compactions by project, model and session, with hints at what sets them off.
+    pub compaction_causes: bool,
+    /// Also read today's auto-compact settings files; implies `compaction_causes`.
+    pub compaction_settings: bool,
+    /// Also read the transcript retention (`cleanupPeriodDays`) from the Claude Code settings
+    /// files and compare it with the oldest request; implies nothing else.
+    pub retention: bool,
+    /// Compare the period before a user-given change date with the one after it (00:00 UTC, ms).
+    pub changed_on: Option<i64>,
+    /// The user's name for that change.
+    pub change_label: Option<String>,
+    /// What to do with local captures.
+    pub capture: Option<CaptureAction>,
+    /// Print the compact diagnosis report for an AI reader; implies findings.
+    pub ai_report: bool,
+    /// Findings the AI report keeps.
+    pub ai_report_max: Option<usize>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum CaptureAction {
+    /// Write the period since `--since` to a capture of this name.
+    Save(String),
+    List,
+    /// Compare two stored captures, earlier first.
+    Compare(String, String),
+    Delete(String),
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -100,6 +135,88 @@ where
             "--json" => options.json = true,
             "--tool-calls" => options.tool_calls = true,
             "--transitions" => options.transitions = true,
+            "--compare" => match args.next() {
+                Some(value) => match parse_since(&value) {
+                    Some(Since::Days(days)) if days.checked_mul(2 * DAY_MS).is_some() => {
+                        options.compare = Some(days)
+                    }
+                    _ => {
+                        return Invocation::Error(format!(
+                            "`{value}` is not a period length; use a day count like 7d"
+                        ));
+                    }
+                },
+                None => return Invocation::Error("--compare needs a period like 7d".to_owned()),
+            },
+            "--subagents" => options.subagents = true,
+            "--skills" => options.skills = true,
+            "--compaction-causes" => options.compaction_causes = true,
+            "--compaction-settings" => {
+                options.compaction_settings = true;
+                options.compaction_causes = true;
+            }
+            "--retention" => options.retention = true,
+            "--ai-report" => {
+                options.ai_report = true;
+                options.findings = true;
+            }
+            "--ai-report-max" => match args.next().and_then(|v| v.parse::<usize>().ok()) {
+                Some(n) if (1..=agentmeter_core::ai_report::MAX_LIMIT).contains(&n) => {
+                    options.ai_report_max = Some(n)
+                }
+                _ => {
+                    return Invocation::Error(format!(
+                        "--ai-report-max needs a number from 1 to {}",
+                        agentmeter_core::ai_report::MAX_LIMIT
+                    ));
+                }
+            },
+            "--changed-on" => match args.next() {
+                Some(value) => match parse_date_ms(&value) {
+                    Some(ms) => options.changed_on = Some(ms),
+                    None => {
+                        return Invocation::Error(format!(
+                            "`{value}` is not a date; use a day like 2026-10-01"
+                        ));
+                    }
+                },
+                None => return Invocation::Error("--changed-on needs a date".to_owned()),
+            },
+            "--change-label" => match args.next() {
+                Some(value) => options.change_label = Some(value),
+                None => return Invocation::Error("--change-label needs a text".to_owned()),
+            },
+            "--capture" | "--captures" | "--delete-capture" | "--compare-captures" => {
+                let action = match arg.as_str() {
+                    "--captures" => Some(CaptureAction::List),
+                    "--capture" => args.next().map(CaptureAction::Save),
+                    "--delete-capture" => args.next().map(CaptureAction::Delete),
+                    _ => match (args.next(), args.next()) {
+                        (Some(a), Some(b)) => Some(CaptureAction::Compare(a, b)),
+                        _ => None,
+                    },
+                };
+                let Some(action) = action else {
+                    return Invocation::Error(format!("{arg} needs its capture name(s)"));
+                };
+                if let CaptureAction::Save(n) | CaptureAction::Delete(n) = &action
+                    && !agentmeter_core::capture::valid_name(n)
+                {
+                    return Invocation::Error(CAPTURE_NAME.to_owned());
+                }
+                if let CaptureAction::Compare(a, b) = &action
+                    && !(agentmeter_core::capture::valid_name(a)
+                        && agentmeter_core::capture::valid_name(b))
+                {
+                    return Invocation::Error(CAPTURE_NAME.to_owned());
+                }
+                if options.capture.replace(action).is_some() {
+                    return Invocation::Error(
+                        "--capture, --captures, --compare-captures and --delete-capture do not combine"
+                            .to_owned(),
+                    );
+                }
+            }
             "--probe" => {
                 options.probe = true;
                 options.findings = true;
@@ -148,12 +265,42 @@ where
             "--probe asks Claude Code; it does not apply to codex".to_owned(),
         );
     }
+    if options.ai_report_max.is_some() && !options.ai_report {
+        return Invocation::Error("--ai-report-max needs --ai-report".to_owned());
+    }
+    if options.compare.is_some() && options.since.is_some() {
+        return Invocation::Error(
+            "--compare sets both periods itself; it does not combine with --since".to_owned(),
+        );
+    }
+    if options.changed_on.is_some() && options.since.is_some() {
+        return Invocation::Error(
+            "--changed-on sets both periods itself; it does not combine with --since".to_owned(),
+        );
+    }
+    if options.change_label.is_some()
+        && options.changed_on.is_none()
+        && !matches!(options.capture, Some(CaptureAction::Save(_)))
+    {
+        return Invocation::Error("--change-label needs --changed-on or --capture".to_owned());
+    }
+    if matches!(options.capture, Some(CaptureAction::Save(_))) && options.since.is_none() {
+        return Invocation::Error(
+            "--capture needs --since to say which period it records".to_owned(),
+        );
+    }
     if !(options.sessions
         || options.projects
         || options.findings
         || options.instructions.is_some()
         || options.tool_calls
-        || options.transitions)
+        || options.transitions
+        || options.compare.is_some()
+        || options.subagents
+        || options.skills
+        || options.compaction_causes
+        || options.changed_on.is_some()
+        || options.capture.is_some())
     {
         options.summary = true;
     }
@@ -199,6 +346,70 @@ Options:
                          with the context around each; with --tool-calls also the areas read
                          again right after a compaction. Metadata only; a pause or a new chat
                          is a marker, never a verdict.
+      --compare <Nd>     The last N days next to the N days before them: requests per active day,
+                         input per request, cache share, compactions, median start context,
+                         sub-agent share and cache rebuilds, each with both values, change and
+                         denominators. Windows with too few days or requests get no change;
+                         model and front-end shifts are named. Shows changes, never causes.
+                         Does not combine with --since; --project and --tool apply.
+      --subagents        Consumption of main sessions and of the agents they delegated to,
+                         only where the log names the parent; runs that overlapped in time;
+                         with --tool-calls files several agents read or wrote. Metadata only;
+                         an overlap is a reason to look, not a conflict.
+      --skills           Installed skills called and not observed in the period, with the size
+                         of each entry in the session-start skill list. Opens message content
+                         for the skill name of Skill calls and reads the SKILL.md headers (name
+                         and description length) of user, plugin and project skills; no skill
+                         content is kept. A skill started by hand with /name is not counted.
+      --compaction-causes
+                         Compactions by project, model and session: count, size before
+                         (min, quartiles, max), automatic/manual/unknown and rate per 1,000
+                         requests, with hints whether a size limit or the way of working is
+                         the lever. A correlation, never a cause. Metadata only.
+      --compaction-settings
+                         Also read today's auto-compact settings (autoCompactWindow, per model
+                         under modelSettings, autoCompactEnabled) from the Claude Code
+                         settings files of the user and of each project's working directory,
+                         and compare them with the sizes. Reads those files only; the setting
+                         is today's, never assigned to compactions of the past. Implies
+                         --compaction-causes.
+      --retention        Also read how long Claude Code keeps transcripts (cleanupPeriodDays,
+                         default 30 days) from the settings files of the user and of each
+                         project's working directory, and compare it with the age of the oldest
+                         request: close to it, earlier logs may have been deleted (a hint, not
+                         proof). Reads those files only; Codex has no such setting (not
+                         measurable). Gaps between the first and last day with requests are
+                         always shown, without saying whether they are pauses or missing logs.
+      --changed-on <date>
+                         The period before a change next to the period since it, of equal
+                         length: the same figures as --compare. The date (like 2026-10-01) is
+                         yours, never guessed. A difference is not an effect of the change;
+                         model and front-end shifts and short periods are named as limits.
+                         Does not combine with --since.
+      --change-label <t> Your name for the change, shown with --changed-on or kept in a capture.
+      --capture <name>   Save the figures of the period given by --since (not the logs) as a
+                         local capture, for later comparison. Never overwrites; numbers only,
+                         no conversation, code or configuration text. Needs --since and one
+                         source (--tool). Files: $AGENTMETER_DATA_DIR/captures, else
+                         $XDG_DATA_HOME/agentmeter/captures, else ~/.local/share/agentmeter/captures.
+      --captures         List the stored captures.
+      --compare-captures <earlier> <later>
+                         Compare two captures like --compare; not comparable (with the reason)
+                         across other sources, projects or rule versions.
+      --delete-capture <name>
+                         Delete a capture.
+      --ai-report        A compact, machine-readable diagnosis for an AI to evaluate (JSON, own
+                         layout): the top findings of --findings and, where you also give them,
+                         of --tool-calls, --skills and --instructions, each with what was
+                         measured, what is uncertain, what is only a guess, what to check and how
+                         an improvement would show; plus data coverage and limits. At most 3
+                         findings (--ai-report-max), in a fixed order; the rest is counted and
+                         named. No prompt, command, output, configuration or skill text; home
+                         directories shortened to ~. Calls no model, changes nothing. Implies
+                         --findings; with --json the report is added as `ai_report` to the
+                         full output instead.
+      --ai-report-max <n>
+                         Findings the AI report keeps, 1 to 20 (default 3).
       --json             Print JSON instead of text (schema: docs/reference/json.md)
       --check <name>     data-quality: exit 1 if a source has unreadable data or none to
                          analyse, 0 otherwise, 2 for a bad call. Findings never fail it.
@@ -300,6 +511,123 @@ mod tests {
             panic!("expected a run");
         };
         assert!(options.transitions && !options.summary && !options.tool_calls);
+    }
+
+    #[test]
+    fn compare_takes_a_day_count_and_stands_alone() {
+        let Invocation::Run(options) = run(&["--compare", "7d"]) else {
+            panic!("expected a run");
+        };
+        assert_eq!(options.compare, Some(7));
+        assert!(!options.summary);
+        for bad in [
+            &["--compare"][..],
+            &["--compare", "2026-10-01"],
+            &["--compare", "0d"],
+        ] {
+            assert!(matches!(run(bad), Invocation::Error(_)), "{bad:?}");
+        }
+        assert!(matches!(
+            run(&["--compare", "7d", "--since", "7d"]),
+            Invocation::Error(_)
+        ));
+        let Invocation::Run(options) = run(&[]) else {
+            panic!("expected a run");
+        };
+        assert_eq!(options.compare, None);
+    }
+
+    #[test]
+    fn subagents_is_a_flag_of_its_own() {
+        let Invocation::Run(options) = run(&["--subagents"]) else {
+            panic!("expected a run");
+        };
+        assert!(options.subagents && !options.summary && !options.tool_calls);
+    }
+
+    #[test]
+    fn skills_is_a_flag_of_its_own() {
+        let Invocation::Run(options) = run(&["--skills"]) else {
+            panic!("expected a run");
+        };
+        assert!(options.skills && !options.summary && !options.tool_calls);
+        let Invocation::Run(options) = run(&[]) else {
+            panic!("expected a run");
+        };
+        assert!(!options.skills);
+    }
+
+    #[test]
+    fn compaction_flags_are_opt_in_and_settings_imply_causes() {
+        let Invocation::Run(options) = run(&["--compaction-causes"]) else {
+            panic!("expected a run");
+        };
+        assert!(options.compaction_causes && !options.compaction_settings && !options.summary);
+        let Invocation::Run(options) = run(&["--compaction-settings"]) else {
+            panic!("expected a run");
+        };
+        assert!(options.compaction_causes && options.compaction_settings && !options.summary);
+        let Invocation::Run(options) = run(&[]) else {
+            panic!("expected a run");
+        };
+        assert!(!options.compaction_causes && !options.compaction_settings);
+    }
+
+    #[test]
+    fn changed_on_needs_a_date_and_stands_alone() {
+        let Invocation::Run(options) =
+            run(&["--changed-on", "2026-10-01", "--change-label", "new rules"])
+        else {
+            panic!("expected a run");
+        };
+        assert!(options.changed_on.is_some() && !options.summary);
+        assert_eq!(options.change_label.as_deref(), Some("new rules"));
+        for bad in [
+            &["--changed-on"][..],
+            &["--changed-on", "7d"],
+            &["--change-label", "x"],
+            &["--changed-on", "2026-10-01", "--since", "7d"],
+        ] {
+            assert!(matches!(run(bad), Invocation::Error(_)), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn capture_actions_are_validated_and_exclusive() {
+        let Invocation::Run(options) = run(&["--capture", "a", "--since", "7d"]) else {
+            panic!("expected a run");
+        };
+        assert_eq!(options.capture, Some(CaptureAction::Save("a".into())));
+        assert!(!options.summary);
+        assert!(matches!(
+            run(&["--compare-captures", "a", "b"]),
+            Invocation::Run(_)
+        ));
+        for bad in [
+            &["--capture", "a"][..],
+            &["--capture", "../a", "--since", "7d"],
+            &["--delete-capture"],
+            &["--compare-captures", "a"],
+            &["--captures", "--delete-capture", "a"],
+        ] {
+            assert!(matches!(run(bad), Invocation::Error(_)), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn ai_report_implies_findings_and_its_limit_needs_it() {
+        let Invocation::Run(options) = run(&["--ai-report", "--ai-report-max", "5"]) else {
+            panic!("expected a run");
+        };
+        assert!(options.ai_report && options.findings && !options.summary);
+        assert_eq!(options.ai_report_max, Some(5));
+        for bad in [
+            &["--ai-report-max", "5"][..],
+            &["--ai-report", "--ai-report-max", "0"],
+            &["--ai-report", "--ai-report-max", "x"],
+        ] {
+            assert!(matches!(run(bad), Invocation::Error(_)), "{bad:?}");
+        }
     }
 
     #[test]

@@ -108,9 +108,18 @@ agentmeter --sessions          # sessions by input
 agentmeter --projects          # projects by input
 agentmeter --findings          # rules with conclusion, measure, evidence and next step
 agentmeter --probe             # also ask Claude Code what a session start holds (see below)
+agentmeter --compare 7d         # the last 7 days next to the 7 days before (see below)
+agentmeter --since 14d --capture before  # save the figures of a period (see below)
+agentmeter --changed-on 2026-10-01  # the period before a change date next to the one since (see below)
 agentmeter --transitions        # starts, resumes, compactions, pauses as a timeline (see below)
+agentmeter --subagents         # direct vs delegated usage, overlapping runs, shared files (see below)
+agentmeter --compaction-causes  # compactions by project, model, session; hints at the lever (see below)
+agentmeter --compaction-settings # also compare today's autoCompactWindow with them (reads settings files)
+agentmeter --retention         # also read cleanupPeriodDays and compare it with the oldest request (see below)
 agentmeter --tool-calls        # also read tool calls: repeated reads/failures, large outputs (see below)
 agentmeter --instructions .  # the instruction files that apply to a directory (see below)
+agentmeter --skills            # skills called and not observed, with their share of the skill list (see below)
+agentmeter --ai-report         # a compact diagnosis as JSON for an AI to evaluate (see below)
 agentmeter --tool codex        # claude, codex or all (default)
 agentmeter --since 7d          # 7d, 30d or a date such as 2026-10-01
 agentmeter --project <name>    # one project
@@ -149,6 +158,88 @@ where the log does; sessions are never linked by time, and a pause or a new chat
 a loss of context. With `--tool-calls` each compaction also counts the areas read again in the
 next 30 calls that were read before it and not edited since, and a project hint appears when this
 repeats; consumption after a transition is measured, not proven avoidable.
+
+## Comparing periods: `--compare <Nd>`
+
+Puts the last N days next to the N days before them, from the same logs and with the same rules
+as the other views. Each figure shows both values, the absolute and relative change and what it
+was divided by: requests per active day, input per request, cache share, compactions per 1,000
+requests, median start context with its sample, sub-agent share and cache rebuilds. Days without
+logs are counted and figures are per active day or per request, not per calendar day. A window
+with fewer than 3 active days or 100 requests is shown without a change, and a shift in the models
+or front ends between the windows is listed as a limitation. A figure the logs cannot give stays
+unknown. A change is shown, not explained, and less or more input is not better or worse work.
+`--project` and `--tool` apply; `--since` does not combine with it.
+
+## Subagents: `--subagents`
+
+Splits the usage of each session into its own requests and those of the agents it delegated to
+(fresh, cached and written input and the model mix, apart), including chains of agents. An agent
+is assigned only where the log names its parent: Claude Code by the session folder of the agent's
+log, Codex by the spawn record, the fork id or the parent history copied into the rollout (the
+weakest, marked as such). Project name and closeness in time never link; an agent without a named
+parent is listed apart and added to no session. The parts add up to the requests and input of the
+summary, and the input "with agents" is derived, never added again.
+
+It also lists pairs of streams that were active at once, told apart as delegation, agents of one
+session, or time only (two independent chats). The logs hold no run time, so a run is a stretch of
+requests less than an hour apart, its length still contains waiting, and a run of one request has
+no observed length. With `--tool-calls` it adds files that several agents read or wrote, during
+the overlap too, with other line ranges as counter-example (Codex logs no file targets, so there it
+says so). An overlap or a shared file is a reason to look, not a conflict, and nothing here
+promises time saved by running agents in parallel or calls delegation inefficient.
+
+## Compaction causes: `--compaction-causes`
+
+Compactions by project, model and session: count, size before the compaction (minimum,
+quartiles, maximum), automatic, manual and unknown trigger, and compactions per 1,000 requests.
+A missing trigger or size stays unknown (always for Codex). Patterns are worded as hints with the
+lever they point to, never as the cause: sizes in a narrow band (a limit: the model's window or
+a setting), most compactions in sessions of more than 24 hours or in one project (the way of
+working). `compact-thrash`, `long-session` and `big-context` are shown as they report; the hints
+only count compactions in the same places.
+
+`--compaction-settings` also reads the auto-compact keys of the Claude Code settings files:
+`autoCompactWindow`, `modelSettings.<model>.autoCompactWindow` (Claude Code 2.1.288 or later) and
+`autoCompactEnabled`, from `settings.json` of the configuration directory and from
+`.claude/settings.json` and `.claude/settings.local.json` in each project's latest working
+directory. Without this flag no file outside the logs is read. The value is today's, never
+assigned to compactions of the past; a window that does not show in the observed sizes is a
+hint, not proof. Managed settings, the environment variable and the command-line flag are not
+visible and take precedence.
+
+## Gaps and retention
+
+The READ block names days without requests between the first and the last day with requests of a
+source (count, longest run, periods); no gap, no line. A gap can be a pause or missing logs and is
+reported as neither; `--check data-quality` ignores it. `--compare`, `--changed-on` and captures
+list the gaps inside each period as a limitation.
+
+`--retention` also reads `cleanupPeriodDays` (default 30 days, any Claude Code settings file; as
+documented in 2026-11, no version stated) from the same settings files as `--compaction-settings`
+and compares it with the age of the oldest request. Close to the retention, the report says
+earlier logs may have been deleted, with measured age, retention and certainty: a hint, not proof.
+Codex has no such setting (not measurable). Without the flag no settings file is read.
+
+## Before and after a change: `--changed-on <date>`
+
+Shows the figures of `--compare` for the period before a date you give and an equally long period
+from that date to now. Name the change with `--change-label "<text>"` if you like; Agent Meter does
+not know what changed on that day and never guesses it. A difference between the periods is not an
+effect of the change: other tasks, a different model or front end and short periods change the
+numbers too, and these are listed as limitations. Less or more input is not better or worse work.
+Nothing is stored. `--project` and `--tool` apply; it does not combine with `--since`.
+
+## Captures: `--capture`, `--captures`, `--compare-captures`, `--delete-capture`
+
+`agentmeter --tool claude --since 14d --capture before-rules --change-label "new CLAUDE.md"` saves
+the figures of `--compare` for that period, up to now, in a local file. Later, make another capture
+and run `agentmeter --compare-captures before-rules after-rules` to see both values, the change
+and what it was divided by. A capture is made only when you ask and holds numbers, no conversation,
+code or configuration text; it never overwrites, and `--delete-capture <name>` removes it.
+Captures from other sources, projects or rule versions are reported as not comparable. Files live
+in `$AGENTMETER_DATA_DIR/captures`, else `$XDG_DATA_HOME/agentmeter/captures`, else
+`~/.local/share/agentmeter/captures`. As with `--compare`, a change is shown, not explained.
 
 ## Tool calls: `--tool-calls`
 
@@ -193,9 +284,53 @@ estimated as bytes ÷ 4. Findings (`broken-import`, `duplicate-instructions`, `b
 This is today's configuration, separate from the log history. Worktrees are separate paths:
 scan the worktree to see its files. Rules in [Findings](docs/reference/findings.md).
 
+## Skills: `--skills`
+
+Claude Code sends the name and description of every model-invocable skill with each session
+start. `--skills` shows which installed skills were called in the period, which were not
+observed, and how much of that list the unused entries take. It opens message content only for
+the skill name of `Skill` tool calls, and reads the `SKILL.md` headers of user, plugin and
+project skills (the project skills of the sessions' working directories) for the name and the
+length of the description; no skill content, argument or prompt text is kept or printed.
+
+Per skill: calls in the period, the latest call in the logs, and the size of its list entry in
+bytes and estimated tokens (bytes ÷ 4, not counted: Claude Code does not document the list's
+format). The finding names the largest unused entries and what to check: disable a plugin, shorten
+a description, keep a skill in the one project that needs it. A skill without a call is "not
+observed in the period", never "never used", and a rarely used skill can still matter. A skill
+you start by hand with `/name` is not counted, since the log records it only in the prompt text,
+and built-in, enterprise, nested and claude.ai skills are not scanned (a call to one is listed
+apart). `disable-model-invocation: true` skills have no list entry and are not counted as unused.
+With `--probe`, Claude Code's own `Skills` figure is shown next to the scan; the two cover
+different sets. Codex logs no skill calls, so there it is "not measurable". Rules followed:
+Claude Code skills documentation, 2026-11, checked with Claude Code 2.1.316
+([Findings](docs/reference/findings.md)).
+
+## For an AI to evaluate: `--ai-report`
+
+`agentmeter --ai-report --since 7d` prints one line of JSON meant to be handed to an AI that
+helps interpret the results. It computes nothing new: it picks the findings of `--findings`
+(always on) and, if you also give `--tool-calls`, `--skills` or `--instructions <dir>`, those
+reports' findings, orders them the same way every time (level, certainty, whether the rule names
+something you control, source, rule) and keeps the first three (`--ai-report-max <n>`, 1 to 20).
+The rest is counted and named, and the full details stay in `--json`.
+
+Per finding it separates what was measured (message, measure with denominator and sample,
+certainty, evidence references), what is uncertain (counter-examples, limits), what is only a
+guess (the rule's interpretation, labelled as such), what to check first, a possible change where
+the rule names a lever, and how an improvement would show (the same measure, measured again).
+Before the findings come the scope, the data coverage, the limitations (gaps, unreadable lines,
+uncalibrated thresholds), and the rules that were not measurable or measured and found nothing,
+so "no data", "nothing found" and "not measurable" stay apart. It takes over no prompt, command,
+output, configuration or skill text; home directories in paths become `~`, strings from the
+machine are one line of at most 400 characters, and the report tells the reader to treat them as
+data, never as instructions. It calls no model and changes nothing; the size is in
+`ai_report.size.bytes` (bytes, not model tokens). Layout:
+[JSON output](docs/reference/json.md).
+
 ## Privacy
 
-Read-only, no network, no telemetry; `--tool-calls` opens message content for call ids, paths, command fingerprints and result sizes (see above); `--probe` is the one exception that starts another program
+Read-only, no network, no telemetry; `--tool-calls` and `--skills` open message content for call ids, paths, command fingerprints, skill names and result sizes (see above); `--probe` is the one exception that starts another program
 (`claude`, see above). The log files contain prompt and tool text, so they are
 read in full, but agentmeter extracts only usage metadata (token counts, timestamps, model,
 session and project ids, compaction events). Prompt and tool text is not analysed, stored or

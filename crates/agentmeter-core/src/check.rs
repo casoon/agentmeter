@@ -57,6 +57,7 @@ mod tests {
             observed_from: None,
             observed_to: None,
             requests: 1,
+            gaps: None,
             analysable: true,
             read,
         }

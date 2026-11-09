@@ -20,8 +20,8 @@ use serde::Serialize;
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, HashMap};
 
-const BASELINE_VERSION: u32 = 1;
-const REBUILD_VERSION: u32 = 1;
+pub(crate) const BASELINE_VERSION: u32 = 1;
+pub(crate) const REBUILD_VERSION: u32 = 1;
 const THRASH_VERSION: u32 = 1;
 const BIG_CONTEXT_VERSION: u32 = 2;
 const LONG_SESSION_VERSION: u32 = 1;
@@ -59,7 +59,7 @@ const THRASH_MAX_GROWTH_TOKENS: u64 = 100_000;
 
 /// Context size above which a request counts as big.
 /// Source: `plan/referenz/00-konzept.md` section 6 (`big-context`, 500k).
-const BIG_CONTEXT_TOKENS: u64 = 500_000;
+pub(crate) const BIG_CONTEXT_TOKENS: u64 = 500_000;
 /// Where the log records the context window (Codex), a request is big above this share of its
 /// own window. Uncalibrated assumption: half the window is where compaction pressure starts.
 const BIG_CONTEXT_WINDOW_SHARE_PCT: u64 = 50;
@@ -70,7 +70,7 @@ const BIG_CONTEXT_MIN_SHARE_PCT: f64 = 10.0;
 
 /// Session length from which `long-session` reports.
 /// Source: `plan/referenz/00-konzept.md` section 6 (`long-session`, 24 h).
-const LONG_SESSION_MS: i64 = 24 * HOUR_MS;
+pub(crate) const LONG_SESSION_MS: i64 = 24 * HOUR_MS;
 
 /// Evidence entries listed per diagnosis.
 const EVIDENCE_MAX: usize = 3;
@@ -213,12 +213,12 @@ fn percent(part: u64, whole: u64) -> f64 {
     }
 }
 
-fn round1(value: f64) -> f64 {
+pub(crate) fn round1(value: f64) -> f64 {
     (value * 10.0).round() / 10.0
 }
 
 /// Nearest-rank quantile of a sorted, non-empty slice.
-fn quantile(sorted: &[u64], p: f64) -> u64 {
+pub(crate) fn quantile(sorted: &[u64], p: f64) -> u64 {
     sorted[((sorted.len() - 1) as f64 * p).round() as usize]
 }
 

@@ -117,6 +117,20 @@ pub struct SessionStart {
     pub parent: Option<String>,
 }
 
+/// A delegated agent's log file and the parent the log names for it. `parent` is `None` when the
+/// log does not name one: the agent then stays unassigned, never guessed from project or time.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct AgentLink {
+    pub source: usize,
+    /// Id of the agent's own thread (Codex) or its log file name (Claude Code).
+    pub agent: String,
+    /// Id of the session or agent that delegated to it.
+    pub parent: Option<String>,
+    /// Where the log names the parent: `session_folder`, `spawn_record`, `fork_record` or
+    /// `copied_history`.
+    pub basis: Option<&'static str>,
+}
+
 /// What the agent itself reports it would send at the start of a session in one directory
 /// (Claude Code `/context`). Estimates by the agent, not counted from a log.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -177,6 +191,8 @@ pub struct Dataset {
     /// Log files read, relative to the projects directory; `source` indexes into this.
     pub files: Vec<String>,
     pub session_starts: Vec<SessionStart>,
+    /// Delegated agents' log files with the parent the log names.
+    pub agent_links: Vec<AgentLink>,
     pub stats: ReadStats,
 }
 
@@ -187,6 +203,9 @@ pub struct DataQuality {
     pub observed_from: Option<String>,
     pub observed_to: Option<String>,
     pub requests: u64,
+    /// Days without requests between the first and the last observed day; `null` when there is
+    /// no request. Pause or missing logs: the logs do not say.
+    pub gaps: Option<crate::gaps::Gaps>,
     /// False when there is no usage to analyse; then "no findings" would be misleading.
     pub analysable: bool,
     #[serde(flatten)]
@@ -238,6 +257,7 @@ impl Dataset {
             observed_from: first.map(crate::time::format_iso),
             observed_to: last.map(crate::time::format_iso),
             requests: self.requests.len() as u64,
+            gaps: crate::gaps::gaps(self.requests.iter().map(|r| r.time_ms)),
             analysable: !self.requests.is_empty(),
             read: self.stats.clone(),
         }

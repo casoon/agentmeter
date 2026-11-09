@@ -10,8 +10,10 @@
 pub mod instructions;
 pub mod probe;
 mod raw;
+pub mod settings;
+pub mod skills;
 
-use agentmeter_core::model::{Compaction, Dataset, ReadStats, Request, SessionStart};
+use agentmeter_core::model::{AgentLink, Compaction, Dataset, ReadStats, Request, SessionStart};
 use agentmeter_core::time::parse_iso_ms;
 use agentmeter_core::toolcalls::{ToolData, ToolEvent, ToolKind, ToolStats, ToolStatus};
 use raw::{RawBlock, RawCompact, RawLine, RawMessage, RawToolMessage, ToolContent};
@@ -136,6 +138,7 @@ struct Reader {
     compactions: Vec<Compaction>,
     files: Vec<String>,
     session_starts: Vec<SessionStart>,
+    agent_links: Vec<AgentLink>,
     source: usize,
     /// `--tool-calls`: open message content for tool calls and results.
     collect_tools: bool,
@@ -258,7 +261,21 @@ impl Reader {
             }
         }
         self.stats.files_without_usage += u64::from(facts.usage_lines == 0);
-        if !in_subagents {
+        if in_subagents {
+            // `<project>/<session>/subagents/<agent>.jsonl`: the session folder names the parent.
+            let parts: Vec<_> = relative.iter().collect();
+            let parent = parts
+                .iter()
+                .position(|c| *c == "subagents")
+                .filter(|at| *at >= 2)
+                .map(|at| parts[at - 1].to_string_lossy().into_owned());
+            self.agent_links.push(AgentLink {
+                source,
+                agent: file_stem,
+                basis: parent.as_ref().map(|_| "session_folder"),
+                parent,
+            });
+        } else {
             let reason = if facts.foreign_session {
                 Some("inherited-history")
             } else if facts.first_message_is_root != Some(true) {
@@ -561,6 +578,7 @@ impl Reader {
             compactions,
             files: self.files,
             session_starts: self.session_starts,
+            agent_links: self.agent_links,
             stats: self.stats,
         }
     }
@@ -626,6 +644,13 @@ fn tool_event(
             text("notebook_path").map(str::to_owned),
             None,
             None,
+        ),
+        // The skill name is kept as the target; the arguments only go into the fingerprint.
+        "Skill" => (
+            ToolKind::Other,
+            text("skill").map(str::to_owned),
+            None,
+            input.map(|i| serde_json::Value::Object(i.clone()).to_string()),
         ),
         "Bash" => (
             ToolKind::Command,

@@ -3,6 +3,7 @@
 //! Reads the local Claude Code and Codex CLI session logs and reports totals and findings.
 //! Read-only.
 
+mod captures;
 mod cli;
 mod menu;
 mod render;
@@ -51,7 +52,7 @@ pub struct Source {
     pub label: &'static str,
     places: Vec<PathBuf>,
     pub dataset: Dataset,
-    /// Tool calls; only read with `--tool-calls`.
+    /// Tool calls; only read with `--tool-calls` or `--skills`.
     pub tools: Option<ToolData>,
 }
 
@@ -72,6 +73,20 @@ pub struct Analysis {
     pub tool_calls: Option<ToolAnalysis>,
     /// What `--transitions` found.
     pub transitions: Option<agentmeter_core::transitions::TransitionReport>,
+    /// What `--compare` found.
+    pub compare: Option<agentmeter_core::compare::Comparison>,
+    /// What `--subagents` found.
+    pub subagents: Option<agentmeter_core::subagents::SubagentReport>,
+    /// What `--skills` found.
+    pub skills: Option<agentmeter_core::skills::SkillAnalysis>,
+    /// What `--compaction-causes` found.
+    pub compaction_causes: Option<agentmeter_core::compaction::CausesReport>,
+    /// What `--changed-on` found.
+    pub before_after: Option<agentmeter_core::before_after::BeforeAfter>,
+    /// What `--retention` found.
+    pub retention: Option<agentmeter_core::gaps::Retention>,
+    /// What `--ai-report` condensed from the analyses above.
+    pub ai_report: Option<agentmeter_core::ai_report::AiReport>,
 }
 
 pub fn read_sources(tool: Tool) -> Vec<Source> {
@@ -138,8 +153,53 @@ pub fn analyse(source: &Source, options: &Options, now_ms: i64, probe: Option<Pr
             .then(|| evaluate(dataset, since_ms, probe.as_ref())),
         probe,
         instructions: None,
+        ai_report: None,
+        compare: options.compare.map(|days| {
+            let (earlier, later) = agentmeter_core::compare::windows_before(now_ms, days);
+            agentmeter_core::compare::compare(dataset, earlier, later)
+        }),
+        retention: options.retention.then(|| {
+            // The settings files are read only when asked for, and only for Claude Code.
+            if source.tool == "claude" {
+                agentmeter_claude::settings::retention(
+                    &agentmeter_claude::config_dirs(),
+                    dataset,
+                    now_ms,
+                )
+            } else {
+                agentmeter_core::gaps::not_measurable(CODEX_RETENTION_REASON)
+            }
+        }),
+        before_after: options.changed_on.map(|change_ms| {
+            agentmeter_core::before_after::before_after(
+                dataset,
+                change_ms,
+                options.change_label.as_deref(),
+                now_ms,
+            )
+        }),
         transitions: options.transitions.then(|| {
-            agentmeter_core::transitions::analyse(dataset, source.tools.as_ref(), since_ms)
+            // Tool calls read only for `--skills` do not feed the timeline.
+            let tools = source.tools.as_ref().filter(|_| options.tool_calls);
+            agentmeter_core::transitions::analyse(dataset, tools, since_ms)
+        }),
+        subagents: options.subagents.then(|| {
+            // Tool calls read only for `--skills` do not feed the overlap check.
+            let tools = source.tools.as_ref().filter(|_| options.tool_calls);
+            agentmeter_core::subagents::analyse(dataset, tools, since_ms)
+        }),
+        skills: None,
+        compaction_causes: options.compaction_causes.then(|| {
+            // The settings files are read only when asked for, and only for Claude Code.
+            let settings = (options.compaction_settings && source.tool == "claude").then(|| {
+                agentmeter_claude::settings::read(&agentmeter_claude::config_dirs(), dataset)
+            });
+            agentmeter_core::compaction::analyse(
+                dataset,
+                since_ms,
+                settings,
+                options.compaction_settings,
+            )
         }),
         tool_calls: source
             .tools
@@ -155,6 +215,11 @@ pub fn analyse(source: &Source, options: &Options, now_ms: i64, probe: Option<Pr
             }),
     }
 }
+
+/// Why Codex has no retention to read.
+const CODEX_RETENTION_REASON: &str = "not measurable: Codex CLI has no setting that deletes its \
+     session files by age (config.toml only caps history.jsonl with history.max_bytes, which is not \
+     the session log); nothing is read";
 
 /// Place name of the directory given to `--instructions` in a probe.
 pub const PROBE_INSTRUCTIONS_PLACE: &str = "instructions directory";
@@ -242,7 +307,16 @@ pub fn run_probe(
     agentmeter_claude::probe::run(&places)
 }
 
+pub fn now_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as i64)
+}
+
 fn run(options: &Options, interactive: bool) -> ExitCode {
+    if let Some(code) = captures::store_action(options) {
+        return code;
+    }
     let instructions_dir = match options.instructions.as_deref().map(Path::new) {
         Some(dir) if !dir.is_dir() => {
             eprintln!(
@@ -253,12 +327,13 @@ fn run(options: &Options, interactive: bool) -> ExitCode {
         }
         other => other,
     };
-    let mut sources = read_sources_with(options.tool, options.tool_calls);
+    let with_tools = options.tool_calls || options.skills;
+    let mut sources = read_sources_with(options.tool, with_tools);
     // A file scan needs no logs: the sources are the agents asked for.
     if instructions_dir.is_some() && options.tool == Tool::All {
-        sources = read_sources_with(Tool::Claude, options.tool_calls)
+        sources = read_sources_with(Tool::Claude, with_tools)
             .into_iter()
-            .chain(read_sources_with(Tool::Codex, options.tool_calls))
+            .chain(read_sources_with(Tool::Codex, with_tools))
             .collect();
     }
     if instructions_dir.is_none()
@@ -302,9 +377,15 @@ fn run(options: &Options, interactive: bool) -> ExitCode {
             let probe = (options.probe && s.tool == "claude")
                 .then(|| run_probe(s, since_ms, io::stderr().is_terminal(), instructions_dir));
             let mut analysis = analyse(s, options, now_ms, probe);
+            if options.skills {
+                analysis.skills = Some(analyse_skills(s, since_ms, analysis.probe.as_ref()));
+            }
             if let Some(dir) = instructions_dir {
                 analysis.instructions =
                     Some(scan_instructions(s.tool, dir, analysis.probe.as_ref()));
+            }
+            if options.ai_report {
+                analysis.ai_report = Some(ai_report(s, &analysis, options, &period));
             }
             analysis
         })
@@ -315,6 +396,9 @@ fn run(options: &Options, interactive: bool) -> ExitCode {
     {
         eprintln!("agentmeter: no project matches `{name}`");
         return ExitCode::FAILURE;
+    }
+    if let Some(cli::CaptureAction::Save(name)) = &options.capture {
+        return captures::save(&sources, options, name);
     }
     if let Some(Check::DataQuality) = options.check {
         return run_check(&sources, &analyses, options.json);
@@ -337,9 +421,18 @@ fn run(options: &Options, interactive: bool) -> ExitCode {
             instructions: a.instructions.as_ref(),
             tool_calls: a.tool_calls.as_ref(),
             transitions: a.transitions.as_ref(),
+            compare: a.compare.as_ref(),
+            subagents: a.subagents.as_ref(),
+            skills: a.skills.as_ref(),
+            compaction_causes: a.compaction_causes.as_ref(),
+            before_after: a.before_after.as_ref(),
+            retention: a.retention.as_ref(),
+            ai_report: a.ai_report.as_ref(),
         })
         .collect();
-    if options.json {
+    if options.ai_report && !options.json {
+        println!("{}", render::ai_report_json(&reports));
+    } else if options.json {
         println!("{}", render::json(&reports));
     } else {
         let terminal = std::io::stdout().is_terminal();
@@ -349,6 +442,94 @@ fn run(options: &Options, interactive: bool) -> ExitCode {
         print!("{}", blocks.join("\n"));
     }
     ExitCode::SUCCESS
+}
+
+/// The AI report of one source, from the analyses the run made.
+fn ai_report(
+    source: &Source,
+    analysis: &Analysis,
+    options: &Options,
+    period: &str,
+) -> agentmeter_core::ai_report::AiReport {
+    let not_condensed: Vec<&'static str> = [
+        (options.summary, "summary"),
+        (options.sessions, "sessions"),
+        (options.projects, "projects"),
+        (options.probe, "probe"),
+        (options.transitions, "transitions"),
+        (options.compare.is_some(), "compare"),
+        (options.subagents, "subagents"),
+        (options.compaction_causes, "compaction_causes"),
+        (options.changed_on.is_some(), "before_after"),
+        (options.retention, "retention"),
+    ]
+    .into_iter()
+    .filter_map(|(on, name)| on.then_some(name))
+    .collect();
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .ok();
+    agentmeter_core::ai_report::build(&agentmeter_core::ai_report::Input {
+        tool: source.tool,
+        project: options.project.as_deref(),
+        period,
+        quality: &analysis.quality,
+        requests_in_period: analysis.requests_in_period,
+        findings: analysis.findings.as_ref(),
+        tool_calls: analysis.tool_calls.as_ref(),
+        instructions: analysis.instructions.as_ref(),
+        skills: analysis.skills.as_ref(),
+        not_condensed,
+        home: home.as_deref(),
+        limit: options
+            .ai_report_max
+            .unwrap_or(agentmeter_core::ai_report::DEFAULT_LIMIT),
+    })
+}
+
+/// Why a source cannot say which skills were called.
+const CODEX_SKILLS_REASON: &str = "Codex logs its tool calls as scripts without a skill name, so skill use is not \
+     measurable; its skill directories are not scanned";
+
+/// Skill calls against the installed skills of one source. Claude only: Codex logs no skill
+/// calls, so its rule is not measurable.
+fn analyse_skills(
+    source: &Source,
+    since_ms: Option<i64>,
+    probe: Option<&Probe>,
+) -> agentmeter_core::skills::SkillAnalysis {
+    use agentmeter_core::skills::{SkillScan, analyse};
+    if source.tool != "claude" {
+        let scan = SkillScan {
+            rules_version: "not applicable to Codex",
+            ..SkillScan::default()
+        };
+        return analyse(&scan, None, since_ms, None, Some(CODEX_SKILLS_REASON));
+    }
+    let scan = agentmeter_claude::skills::scan(
+        &agentmeter_claude::config_dirs(),
+        &session_dirs(&source.dataset, since_ms),
+    );
+    analyse(&scan, source.tools.as_ref(), since_ms, probe, None)
+}
+
+/// Working directories of the sessions that have requests in the period, once each.
+fn session_dirs(dataset: &Dataset, since_ms: Option<i64>) -> Vec<PathBuf> {
+    let sessions: std::collections::HashSet<&str> = dataset
+        .requests
+        .iter()
+        .filter(|r| since_ms.is_none_or(|s| r.time_ms >= s))
+        .map(|r| r.session.as_str())
+        .collect();
+    let mut dirs: Vec<PathBuf> = dataset
+        .session_starts
+        .iter()
+        .filter(|s| sessions.contains(s.session.as_str()))
+        .filter_map(|s| s.cwd.as_deref().map(PathBuf::from))
+        .collect();
+    dirs.sort();
+    dirs.dedup();
+    dirs
 }
 
 /// The instruction files of one agent for `dir`; a probe that ran in `dir` confirms the files

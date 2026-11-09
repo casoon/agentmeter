@@ -16,7 +16,7 @@
 pub mod instructions;
 mod raw;
 
-use agentmeter_core::model::{Compaction, Dataset, ReadStats, Request, SessionStart};
+use agentmeter_core::model::{AgentLink, Compaction, Dataset, ReadStats, Request, SessionStart};
 use agentmeter_core::time::parse_iso_ms;
 use agentmeter_core::toolcalls::{ToolData, ToolEvent, ToolKind, ToolStats, ToolStatus};
 use raw::{RawCompacted, RawEvent, RawItem, RawLine, RawMeta, RawTokens, RawTurnContext};
@@ -216,6 +216,8 @@ struct FileFacts {
     foreign_meta: bool,
     forked: bool,
     parent: Option<String>,
+    /// Parent thread named by the sub-agent's spawn record (`source.subagent.thread_spawn`).
+    spawn_parent: Option<String>,
     first_is_meta: Option<bool>,
     /// `originator` and `cwd` of the first `session_meta`.
     entrypoint: Option<String>,
@@ -232,6 +234,7 @@ struct Reader {
     compactions: Vec<Compaction>,
     files: Vec<String>,
     session_starts: Vec<SessionStart>,
+    agent_links: Vec<AgentLink>,
     /// Events already counted from another file (a sub-agent rollout replays its parent).
     seen_events: HashSet<(String, u64, u64, u64)>,
     seen_compactions: HashSet<String>,
@@ -335,7 +338,20 @@ impl Reader {
             }
         }
         self.stats.files_without_usage += u64::from(facts.usage_events == 0);
-        if !facts.sub {
+        if facts.sub {
+            let (parent, basis) = match (facts.spawn_parent.take(), facts.parent.take()) {
+                (Some(id), _) => (Some(id), Some("spawn_record")),
+                (None, Some(id)) if facts.forked => (Some(id), Some("fork_record")),
+                (None, Some(id)) => (Some(id), Some("copied_history")),
+                (None, None) => (None, None),
+            };
+            self.agent_links.push(AgentLink {
+                source,
+                agent: facts.session,
+                parent,
+                basis,
+            });
+        } else {
             let reason = if facts.foreign_meta || facts.forked {
                 Some("inherited-history")
             } else if facts.first_is_meta != Some(true) {
@@ -450,6 +466,13 @@ impl Reader {
             facts.sub = meta.thread_source.as_deref() == Some("subagent");
             facts.forked = meta.forked_from_id.is_some();
             facts.parent = meta.forked_from_id.clone().filter(|id| !id.is_empty());
+            facts.spawn_parent = meta
+                .source
+                .as_ref()
+                .and_then(|s| s.pointer("/subagent/thread_spawn/parent_thread_id"))
+                .and_then(|id| id.as_str())
+                .filter(|id| !id.is_empty())
+                .map(str::to_owned);
             if let Some(name) = meta.cwd.as_deref().and_then(project_name) {
                 facts.project = name;
             }
@@ -611,6 +634,7 @@ impl Reader {
             compactions: self.compactions,
             files: self.files,
             session_starts: self.session_starts,
+            agent_links: self.agent_links,
             stats: self.stats,
         }
     }

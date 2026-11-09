@@ -76,6 +76,13 @@ pub struct Report<'a> {
     pub instructions: Option<&'a InstructionScan>,
     pub tool_calls: Option<&'a ToolAnalysis>,
     pub transitions: Option<&'a agentmeter_core::transitions::TransitionReport>,
+    pub compare: Option<&'a agentmeter_core::compare::Comparison>,
+    pub subagents: Option<&'a agentmeter_core::subagents::SubagentReport>,
+    pub skills: Option<&'a agentmeter_core::skills::SkillAnalysis>,
+    pub compaction_causes: Option<&'a agentmeter_core::compaction::CausesReport>,
+    pub before_after: Option<&'a agentmeter_core::before_after::BeforeAfter>,
+    pub retention: Option<&'a agentmeter_core::gaps::Retention>,
+    pub ai_report: Option<&'a agentmeter_core::ai_report::AiReport>,
 }
 
 /// Widest the text gets, also in a wider terminal or a pipe; bars are at most [`BAR`] cells.
@@ -198,11 +205,26 @@ pub fn text(report: &Report, style: Style) -> String {
     if let Some(findings) = report.findings {
         out += &findings_text(findings, report.probe, style);
     }
+    if let Some(c) = report.compare {
+        out += &compare_text(c, style);
+    }
+    if let Some(b) = report.before_after {
+        out += &before_after_text(b, style);
+    }
     if let Some(t) = report.transitions {
         out += &transitions_text(t, style);
     }
+    if let Some(s) = report.subagents {
+        out += &subagents_text(s, style);
+    }
+    if let Some(c) = report.compaction_causes {
+        out += &compaction_causes_text(c, style);
+    }
     if let Some(tools) = report.tool_calls {
         out += &tool_calls_text(tools, style);
+    }
+    if let Some(skills) = report.skills {
+        out += &skills_text(skills, style);
     }
     if let Some(scan) = report.instructions {
         out += &instructions_text(scan, style);
@@ -228,6 +250,113 @@ fn duration(ms: i64) -> String {
 /// Context size: the log's number, or the word for not recorded.
 fn ctx_or_unknown(value: Option<u64>) -> String {
     value.map_or("unknown".to_owned(), tokens)
+}
+
+fn compare_value(name: &str, value: Option<f64>) -> String {
+    match (name, value) {
+        (_, None) => "unknown".to_owned(),
+        ("cache_read_pct" | "sub_agent_pct", Some(v)) => format!("{v:.1} %"),
+        ("median_start_context" | "input_per_request", Some(v)) => tokens(v.round() as u64),
+        (_, Some(v)) if v.fract() == 0.0 => count(v as u64),
+        (_, Some(v)) => format!("{v:.1}"),
+    }
+}
+
+fn before_after_text(b: &agentmeter_core::before_after::BeforeAfter, style: Style) -> String {
+    let mut out = heading(style, "BEFORE AND AFTER");
+    let change = match &b.label {
+        Some(label) => format!("{} ({label})", &b.change_point[..10]),
+        None => b.change_point[..10].to_owned(),
+    };
+    out += &wrap(
+        style,
+        &format!("{change} · {} days each side", count(b.period_days as u64)),
+        "  change     ",
+        "             ",
+        13,
+    );
+    out += &wrap(style, b.notice, "  note       ", "             ", 13);
+    out += &compare_body(&b.comparison, style);
+    out
+}
+
+fn compare_text(c: &agentmeter_core::compare::Comparison, style: Style) -> String {
+    let out = heading(style, "COMPARISON");
+    out + &compare_body(c, style)
+}
+
+fn compare_body(c: &agentmeter_core::compare::Comparison, style: Style) -> String {
+    let mut out = String::new();
+    out += &wrap(style, c.method, "  method     ", "             ", 13);
+    for (name, w) in [("earlier", &c.earlier), ("later  ", &c.later)] {
+        out += &wrap(
+            style,
+            &format!(
+                "{} to {} · {} requests · {} of {} days with logs, {} without",
+                &w.from[..10],
+                &w.to[..10],
+                count(w.requests),
+                count(w.active_days),
+                count(w.days),
+                count(w.days_without_logs)
+            ),
+            &format!("  {name}    "),
+            "             ",
+            13,
+        );
+    }
+    out += "\n";
+    out += &style.dim(&format!(
+        "  {:<30} {:>9} {:>9} {:>9} {:>8}\n",
+        "Metric", "Earlier", "Later", "Change", "Rel."
+    ));
+    for m in &c.metrics {
+        let change = match (m.change, m.change_pct) {
+            (Some(x), _) if m.unit == "%" => format!("{x:+.1} pp"),
+            (Some(x), _) => format!("{x:+.1}"),
+            (None, _) => "-".to_owned(),
+        };
+        let rel = m
+            .change_pct
+            .map_or("-".to_owned(), |x| format!("{x:+.0} %"));
+        out += &format!(
+            "  {:<30} {:>9} {:>9} {:>9} {:>8}\n",
+            m.name.replace('_', " "),
+            compare_value(m.name, m.earlier),
+            compare_value(m.name, m.later),
+            change,
+            rel
+        );
+        out += &style.dim(&format!(
+            "    per {} · {} / {}\n",
+            m.denominator_unit,
+            count(m.denominator_earlier),
+            count(m.denominator_later)
+        ));
+        if let Some(n) = &m.note {
+            out += &wrap(style, &format!("not measured: {n}"), "      ", "      ", 6);
+        }
+    }
+    if c.verdict != "compared" {
+        out += "\n";
+        out += &wrap(
+            style,
+            "no change is stated: a window is empty or too small",
+            "  note  ",
+            "        ",
+            8,
+        );
+    }
+    for l in &c.limitations {
+        out += &wrap(
+            style,
+            &format!("{}: {}", l.kind, l.text),
+            "  limit ",
+            "        ",
+            8,
+        );
+    }
+    out
 }
 
 fn transitions_text(r: &agentmeter_core::transitions::TransitionReport, style: Style) -> String {
@@ -344,6 +473,438 @@ fn transitions_text(r: &agentmeter_core::transitions::TransitionReport, style: S
     out
 }
 
+fn usage_line(u: &agentmeter_core::subagents::Usage) -> String {
+    let mut models: Vec<(&String, &u64)> = u.models.iter().collect();
+    models.sort_by_key(|(name, n)| (std::cmp::Reverse(**n), (*name).clone()));
+    let mix: Vec<String> = models
+        .iter()
+        .take(3)
+        .map(|(name, n)| format!("{} {}", clip(name, 24), count(**n)))
+        .collect();
+    format!(
+        "{} requests · input {} (fresh {} · cached {} · written {}) · models {}",
+        count(u.requests),
+        tokens(u.input),
+        tokens(u.fresh),
+        tokens(u.cache_read),
+        tokens(u.cache_write),
+        if mix.is_empty() {
+            "-".to_owned()
+        } else {
+            mix.join(", ")
+        }
+    )
+}
+
+fn cause_group_line(g: &agentmeter_core::compaction::Group) -> String {
+    let before = g.tokens_before.as_ref().map_or("unknown".to_owned(), |s| {
+        format!(
+            "{} / {} / {} (min / median / max), quartiles {} and {}",
+            tokens(s.min),
+            tokens(s.median),
+            tokens(s.max),
+            tokens(s.q1),
+            tokens(s.q3)
+        )
+    });
+    format!(
+        "{} compactions · {} per 1,000 requests · {} automatic, {} manual, {} unknown trigger · before {}{}",
+        count(g.compactions),
+        g.per_1000_requests
+            .map_or("unknown".to_owned(), |r| r.to_string()),
+        count(g.triggers.auto),
+        count(g.triggers.manual),
+        count(g.triggers.unknown),
+        before,
+        if g.without_tokens_after > 0 {
+            format!(" · {} without size after", count(g.without_tokens_after))
+        } else {
+            String::new()
+        }
+    )
+}
+
+fn optional_count(value: Option<u64>) -> String {
+    value.map_or("not measurable".to_owned(), count)
+}
+
+/// A length of time; zero is "none", since a run of one request has no observed length.
+fn run_length(ms: i64) -> String {
+    if ms == 0 {
+        "none".to_owned()
+    } else {
+        duration(ms)
+    }
+}
+
+fn subagents_text(r: &agentmeter_core::subagents::SubagentReport, style: Style) -> String {
+    let mut out = heading(style, "SUBAGENTS");
+    out += &wrap(style, r.method, "  method     ", "             ", 13);
+    let c = &r.counts;
+    out += &wrap(
+        style,
+        &format!(
+            "{} sessions · {} delegated · {} agents (deepest chain {}, {} nested) · {} without a named parent",
+            count(c.sessions),
+            count(c.sessions_with_agents),
+            count(c.agents),
+            c.max_depth,
+            count(c.nested_agents),
+            count(c.unassigned_agents)
+        ),
+        "  observed   ",
+        "             ",
+        13,
+    );
+    let t = &r.totals;
+    out += &wrap(
+        style,
+        &format!(
+            "of {} requests: {} direct · {} by agents with a named parent · {} by agents without",
+            count(t.requests),
+            count(t.direct.requests),
+            count(t.delegated.requests),
+            count(t.unassigned.requests)
+        ),
+        "  split      ",
+        "             ",
+        13,
+    );
+    out += "\n";
+    for root in r.roots.iter().take(TABLE_ROWS) {
+        out += &format!(
+            "  {} · {}{}\n",
+            style.bold(&clip(&root.session, 36)),
+            clip(&root.project, 28),
+            if root.in_logs {
+                ""
+            } else {
+                " · session log not read"
+            }
+        );
+        out += &wrap(
+            style,
+            &format!("direct   {}", usage_line(&root.direct)),
+            "    ",
+            "             ",
+            4,
+        );
+        out += &wrap(
+            style,
+            &format!("agents   {}", usage_line(&root.delegated)),
+            "    ",
+            "             ",
+            4,
+        );
+        out += &wrap(
+            style,
+            &format!(
+                "{} agents, chain depth {} · input with agents {} (derived, not a total)",
+                count(root.agents),
+                root.max_depth,
+                tokens(root.inclusive_input)
+            ),
+            "    ",
+            "    ",
+            4,
+        );
+        out += &wrap(
+            style,
+            &format!(
+                "{} runs · span {} · inside runs {} · paused {} (run length includes waiting)",
+                count(root.runs),
+                run_length(root.span_ms),
+                run_length(root.active_ms),
+                run_length(root.paused_ms)
+            ),
+            "    ",
+            "    ",
+            4,
+        );
+        if let Some(s) = &root.start_context {
+            out += &wrap(
+                style,
+                &format!(
+                    "first requests of {} agents sent {} (cached {} · written {}); a measure, not a verdict",
+                    count(s.agents),
+                    tokens(s.context),
+                    tokens(s.cache_read),
+                    tokens(s.cache_write)
+                ),
+                "    ",
+                "    ",
+                4,
+            );
+        }
+        if r.file_data {
+            out += &wrap(
+                style,
+                &format!(
+                    "files: {} areas read by several · {} written by several · {} read at other lines only",
+                    optional_count(root.shared_reads),
+                    optional_count(root.shared_writes),
+                    optional_count(root.shared_reads_other_ranges)
+                ),
+                "    ",
+                "    ",
+                4,
+            );
+            for e in &root.shared_examples {
+                out += &wrap(style, e, "    · ", "      ", 6);
+            }
+        }
+        for child in root.children.iter().take(3) {
+            out += &wrap(
+                style,
+                &format!(
+                    "agent {} (depth {}, parent {} via {}): {} requests, input {}",
+                    child.agent.as_deref().unwrap_or("unknown"),
+                    child.depth.map_or("?".to_owned(), |d| d.to_string()),
+                    child.parent.as_deref().unwrap_or("unknown"),
+                    child.parent_basis.unwrap_or("-"),
+                    count(child.usage.requests),
+                    tokens(child.usage.input)
+                ),
+                "    · ",
+                "      ",
+                6,
+            );
+        }
+        if let Some(first) = root.children.first() {
+            out += &evidence_text(style, &first.file, &first.first);
+        }
+        out += "\n";
+    }
+    if !r.unassigned.is_empty() {
+        out += &format!(
+            "  without a named parent ({}):\n",
+            count(r.unassigned.len() as u64)
+        );
+        for child in r.unassigned.iter().take(5) {
+            out += &wrap(
+                style,
+                &format!(
+                    "{}: {} requests, input {}",
+                    child.agent.as_deref().unwrap_or("unknown agent"),
+                    count(child.usage.requests),
+                    tokens(child.usage.input)
+                ),
+                "    · ",
+                "      ",
+                6,
+            );
+            out += &evidence_text(style, &child.file, &child.first);
+        }
+        out += "\n";
+    }
+    if !r.overlaps.is_empty() {
+        out += &format!(
+            "  overlapping runs: {} with a delegation, {} agents of one session, {} in time only\n",
+            count(c.overlaps_delegation),
+            count(c.overlaps_same_task),
+            count(c.overlaps_time_only)
+        );
+        for o in r.overlaps.iter().take(5) {
+            let relation = match o.relation {
+                "delegation" => "delegation",
+                "same_task" => "same session",
+                _ => "time only",
+            };
+            out += &wrap(
+                style,
+                &format!(
+                    "{} + {} · {} · {}{}",
+                    clip(&o.first, 28),
+                    clip(&o.second, 28),
+                    relation,
+                    if o.overlap_ms == 0 {
+                        "at one request time".to_owned()
+                    } else {
+                        format!("{} together", duration(o.overlap_ms))
+                    },
+                    o.shared_writes.map_or(String::new(), |w| format!(
+                        " · {} files written by both, {} areas read by both",
+                        count(w),
+                        count(o.shared_reads.unwrap_or(0))
+                    ))
+                ),
+                "    · ",
+                "      ",
+                6,
+            );
+        }
+        out += "\n";
+    }
+    for e in &r.counterexamples {
+        out += &wrap(style, e, "  counter  ", "           ", 11);
+    }
+    for n in &r.notes {
+        out += &wrap(style, n, "  note  ", "        ", 8);
+    }
+    out
+}
+
+fn compaction_causes_text(r: &agentmeter_core::compaction::CausesReport, style: Style) -> String {
+    let mut out = heading(style, "COMPACTION CAUSES");
+    out += &wrap(style, r.method, "  method     ", "             ", 13);
+    out += &wrap(
+        style,
+        &cause_group_line(&r.totals),
+        "  all        ",
+        "             ",
+        13,
+    );
+    for (title, rows) in [("PROJECTS", &r.projects), ("MODELS", &r.models)] {
+        if rows.is_empty() {
+            continue;
+        }
+        out += &format!("\n  {title}\n");
+        for g in rows.iter().take(TABLE_ROWS) {
+            out += &wrap(
+                style,
+                &cause_group_line(g),
+                &format!("  {} · ", style.bold(&clip(&g.key, 28))),
+                "    ",
+                clip(&g.key, 28).chars().count() + 5,
+            );
+        }
+    }
+    if !r.sessions.is_empty() {
+        out += "\n  SESSIONS\n";
+        for s in r.sessions.iter().take(5) {
+            out += &wrap(
+                style,
+                &format!(
+                    "{} · {} · {} requests over {} · peak context {}",
+                    clip(&s.project, 24),
+                    cause_group_line(&s.group),
+                    count(s.group.requests),
+                    duration(s.span_ms),
+                    tokens(s.peak_context)
+                ),
+                &format!("  {} · ", clip(&s.group.key, 12)),
+                "    ",
+                clip(&s.group.key, 12).chars().count() + 5,
+            );
+        }
+    }
+    out += "\n  OBSERVATIONS\n";
+    if r.observations.is_empty() {
+        out += &wrap(
+            style,
+            "no pattern above the thresholds: no narrow band of sizes, no concentration in long sessions or in one project",
+            "    ",
+            "    ",
+            4,
+        );
+    }
+    for o in &r.observations {
+        out += &wrap(
+            style,
+            &format!("{} (hint, lever: {})", o.message, o.lever),
+            "    · ",
+            "      ",
+            6,
+        );
+        if let Some(rule) = o.see_rule {
+            out += &wrap(
+                style,
+                &format!(
+                    "the same behaviour is reported by `{rule}`; these are its compactions, not a new finding"
+                ),
+                "      see   ",
+                "            ",
+                12,
+            );
+        }
+        out += &wrap(style, &o.check, "      check ", "            ", 12);
+    }
+    out += "\n  EXISTING RULES\n";
+    for x in &r.related_rules {
+        out += &wrap(
+            style,
+            x.message
+                .as_deref()
+                .or(x.reason.as_deref())
+                .unwrap_or("not measured"),
+            &format!("    {} ({}) · ", x.rule, x.status),
+            "      ",
+            x.rule.len() + x.status.len() + 10,
+        );
+    }
+    if let Some(s) = &r.settings {
+        out += "\n  SETTINGS\n";
+        out += &wrap(style, s.reference, "    docs  ", "          ", 10);
+        out += &wrap(style, s.as_of, "    as of ", "          ", 10);
+        for f in s.files.iter().filter(|f| f.state != "read") {
+            out += &wrap(
+                style,
+                &format!("{} ({} settings): {}", f.path, f.scope, f.state),
+                "    file  ",
+                "          ",
+                10,
+            );
+        }
+        let read = s.files.iter().filter(|f| f.state == "read").count();
+        out += &format!("    settings files read: {}\n", count(read as u64));
+        if !s.projects_not_read.is_empty() {
+            out += &wrap(
+                style,
+                &format!(
+                    "{}: working directory unknown or gone, so project and local settings were not looked at",
+                    s.projects_not_read
+                        .iter()
+                        .map(|p| clip(p, 28))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+                "    not read ",
+                "             ",
+                13,
+            );
+        }
+        for w in &s.windows {
+            out += &wrap(
+                style,
+                &format!(
+                    "{} {} {}{}",
+                    w.scope,
+                    w.model.as_deref().unwrap_or("every model"),
+                    w.tokens.map_or("auto".to_owned(), tokens),
+                    w.note
+                        .as_deref()
+                        .map_or(String::new(), |n| format!(" ({n})"))
+                ),
+                "    window ",
+                "           ",
+                11,
+            );
+        }
+        for c in &r.settings_comparison {
+            out += &wrap(
+                style,
+                &format!(
+                    "{}{}",
+                    c.message,
+                    if c.auto_compact_enabled == Some(false) {
+                        "; autoCompactEnabled is false there today"
+                    } else {
+                        ""
+                    }
+                ),
+                &format!("    {} · {} · ", clip(&c.project, 20), clip(&c.model, 24)),
+                "      ",
+                clip(&c.project, 20).chars().count() + clip(&c.model, 24).chars().count() + 10,
+            );
+        }
+    }
+    out += "\n";
+    for n in &r.notes {
+        out += &wrap(style, n, "  note  ", "        ", 8);
+    }
+    out
+}
+
 fn tool_calls_text(a: &ToolAnalysis, style: Style) -> String {
     let mut out = heading(style, "TOOL CALLS");
     out += &wrap(style, a.method, "  method     ", "             ", 13);
@@ -438,6 +999,156 @@ fn tool_calls_text(a: &ToolAnalysis, style: Style) -> String {
         if let Some(n) = &r.next_step {
             out += &wrap(style, &format!("next  {n}"), indent, "          ", 4);
         }
+    }
+    out
+}
+
+/// Rows of the used skills shown in the text; the JSON has all.
+const SKILL_ROWS: usize = 10;
+
+fn skills_text(a: &agentmeter_core::skills::SkillAnalysis, style: Style) -> String {
+    use agentmeter_core::skills::ListState;
+    let mut out = heading(style, "SKILLS");
+    out += &wrap(style, a.method, "  method     ", "             ", 13);
+    out += &wrap(style, a.rules_version, "  rules      ", "             ", 13);
+    out += &wrap(
+        style,
+        &format!(
+            "{} installed · {} listed · {} manual only · {} unreadable · {} called in the period \
+             ({} calls)",
+            count(a.installed),
+            count(a.listed),
+            count(a.user_only),
+            count(a.unreadable),
+            count(a.used),
+            count(a.calls)
+        ),
+        "  skills     ",
+        "             ",
+        13,
+    );
+    out += &wrap(
+        style,
+        &format!(
+            "{} bytes, ≈{} tokens (estimated) for {} listed entries",
+            count(a.listed_bytes),
+            tokens(a.listed_est_tokens),
+            count(a.listed)
+        ),
+        "  list size  ",
+        "             ",
+        13,
+    );
+    if let Some(p) = &a.probe {
+        out += &wrap(
+            style,
+            &format!(
+                "/context ({}) counts ≈{} tokens for Skills; the scan of user and plugin skills \
+                 gives ≈{}. Different scope, not a check of one against the other",
+                p.place,
+                tokens(p.probe_tokens),
+                tokens(p.scanned_est_tokens)
+            ),
+            "  probe      ",
+            "             ",
+            13,
+        );
+    }
+    let (mark, tone, word) = match a.status {
+        "observed" => ("◆", Tone::Warning, "not observed in the period"),
+        "checked_none" => ("✓", Tone::Success, "checked, nothing to report"),
+        _ => ("·", Tone::Muted, "not measurable"),
+    };
+    out += &format!(
+        "\n  {} {} · {}\n",
+        style.tone(tone, mark),
+        style.bold("unused-skills"),
+        word
+    );
+    let indent = "    ";
+    if let Some(reason) = &a.reason {
+        out += &wrap(style, reason, indent, indent, 4);
+    }
+    if let Some(m) = &a.message {
+        out += &wrap(style, m, indent, indent, 4);
+    }
+    for r in &a.largest_unused {
+        out += &wrap(
+            style,
+            &format!(
+                "{} B ≈{} tokens  {} [{}]",
+                count(r.list_bytes),
+                tokens(r.list_est_tokens),
+                r.name,
+                r.source
+            ),
+            "    · ",
+            "      ",
+            6,
+        );
+    }
+    let used: Vec<_> = a.skills.iter().filter(|r| r.calls > 0).collect();
+    if !used.is_empty() {
+        out += "\n    called in the period\n";
+    }
+    for r in used.iter().take(SKILL_ROWS) {
+        let last = r.last_used.as_deref().unwrap_or("?");
+        out += &wrap(
+            style,
+            &format!(
+                "{} × {} [{}] · last {last}",
+                count(r.calls),
+                r.name,
+                r.source
+            ),
+            "    · ",
+            "      ",
+            6,
+        );
+    }
+    if used.len() > SKILL_ROWS {
+        out += &format!(
+            "    … and {} more (all in --json)\n",
+            used.len() - SKILL_ROWS
+        );
+    }
+    if !a.called_not_scanned.is_empty() {
+        let names: Vec<String> = a
+            .called_not_scanned
+            .iter()
+            .map(|c| format!("{} × {}", count(c.calls), c.name))
+            .collect();
+        out += "\n";
+        out += &wrap(
+            style,
+            &format!("called, not among the scanned skills  {}", names.join(", ")),
+            "    ",
+            "    ",
+            4,
+        );
+    }
+    let manual = a
+        .skills
+        .iter()
+        .filter(|r| r.state == ListState::UserOnly)
+        .count();
+    if manual > 0 {
+        out += &wrap(
+            style,
+            &format!(
+                "{manual} skill(s) are manual only: no entry in the list, not counted as unused"
+            ),
+            "    ",
+            "    ",
+            4,
+        );
+    }
+    if let Some(n) = &a.next_step {
+        out += &wrap(style, &format!("next  {n}"), indent, "          ", 4);
+    }
+    out += "\n";
+    for n in &a.notes {
+        out += &wrap(style, n, "  note  ", "        ", 8);
     }
     out
 }
@@ -1197,6 +1908,26 @@ fn read_text(report: &Report, style: Style) -> String {
         }
         _ => out += &line(&bad, "observed", "no requests with usage".to_owned()),
     }
+    // A period without gaps shows nothing.
+    if let Some(gaps) = quality.gaps.as_ref().filter(|g| g.gap_days > 0) {
+        let longest = gaps.longest_gap.as_ref().map_or(String::new(), |l| {
+            format!(" · longest {} days ({} – {})", l.days, l.from, l.to)
+        });
+        out += &line(
+            &note,
+            "gaps",
+            format!(
+                "{} of {} days between the first and the last request have none, in {} runs{longest}. {}",
+                count(gaps.gap_days),
+                count(gaps.span_days),
+                count(gaps.periods.len() as u64),
+                agentmeter_core::gaps::GAP_NOTE
+            ),
+        );
+    }
+    if let Some(r) = report.retention {
+        out += &retention_text(r, &line, &ok, &note);
+    }
 
     // Problems lose data; limits leave something unmeasured; info only says what was done.
     let mut problems = Vec::new();
@@ -1338,6 +2069,61 @@ fn read_text(report: &Report, style: Style) -> String {
     out
 }
 
+/// The `--retention` lines of the READ block.
+fn retention_text(
+    r: &agentmeter_core::gaps::Retention,
+    line: &dyn Fn(&str, &str, String) -> String,
+    ok: &str,
+    note: &str,
+) -> String {
+    let mut out = String::new();
+    if !r.measurable {
+        return line(note, "retention", r.note.clone());
+    }
+    match (r.effective_days, r.basis) {
+        (Some(days), Some(basis)) => {
+            out += &line(
+                ok,
+                "retention",
+                format!("{} {days} days ({basis}); {}", r.key, r.note),
+            )
+        }
+        _ => out += &line(note, "retention", r.note.clone()),
+    }
+    for f in r
+        .files
+        .iter()
+        .filter(|f| !matches!(f.state, "read" | "missing"))
+    {
+        out += &line(
+            note,
+            "retention",
+            format!("{} ({} settings): {}", f.path, f.scope, f.state),
+        );
+    }
+    for v in r.values.iter().filter(|v| v.days.is_none()) {
+        out += &line(
+            note,
+            "retention",
+            format!("{} ({} settings): value not usable", v.file, v.scope),
+        );
+    }
+    if !r.projects_not_read.is_empty() {
+        out += &line(
+            note,
+            "retention",
+            format!(
+                "working directory unknown or gone for {}: their project and local settings were not looked at",
+                r.projects_not_read.join(", ")
+            ),
+        );
+    }
+    if let Some(h) = &r.hint {
+        out += &line(note, "retention", h.text.clone());
+    }
+    out
+}
+
 fn list(map: &std::collections::BTreeMap<String, u64>) -> String {
     map.iter()
         .map(|(name, n)| format!("{name} ({})", count(*n)))
@@ -1348,6 +2134,16 @@ fn list(map: &std::collections::BTreeMap<String, u64>) -> String {
 pub fn json(reports: &[Report]) -> String {
     let sources: Vec<Value> = reports.iter().map(json_source).collect();
     serde_json::to_string_pretty(&json!({ "schema_version": SCHEMA_VERSION, "sources": sources }))
+        .expect("serialisable")
+}
+
+/// `--ai-report` alone: only the compact reports, one per source, in one line of JSON.
+pub fn ai_report_json(reports: &[Report]) -> String {
+    let sources: Vec<Value> = reports
+        .iter()
+        .map(|r| json!({ "tool": r.tool, "ai_report": r.ai_report }))
+        .collect();
+    serde_json::to_string(&json!({ "schema_version": SCHEMA_VERSION, "sources": sources }))
         .expect("serialisable")
 }
 
@@ -1421,12 +2217,115 @@ fn json_source(report: &Report) -> Value {
     if let Some(v) = report.transitions {
         put("transitions", json!(v));
     }
+    if let Some(v) = report.compare {
+        put("compare", json!(v));
+    }
+    if let Some(v) = report.subagents {
+        put("subagents", json!(v));
+    }
+    if let Some(v) = report.skills {
+        put("skills", json!(v));
+    }
+    if let Some(v) = report.compaction_causes {
+        put("compaction_causes", json!(v));
+    }
+    if let Some(v) = report.before_after {
+        put("before_after", json!(v));
+    }
+    if let Some(v) = report.retention {
+        put("retention", json!(v));
+    }
+    if let Some(v) = report.ai_report {
+        put("ai_report", json!(v));
+    }
     if let Some(v) = report.findings {
         put("verdict", json!(v.verdict));
         put("findings", json!(v.findings));
         put("rules", json!(v.rules));
     }
     root
+}
+
+/// `--compare-captures`: the two captures side by side, or why they cannot be compared.
+pub fn capture_comparison_text(
+    c: &agentmeter_core::capture::CaptureComparison,
+    style: Style,
+) -> String {
+    let mut out = heading(style, "CAPTURE COMPARISON");
+    for (name, r) in [("earlier", &c.earlier), ("later  ", &c.later)] {
+        let label = r
+            .label
+            .as_ref()
+            .map_or(String::new(), |l| format!(" ({l})"));
+        out += &wrap(
+            style,
+            &format!("{}{label} · made {}", r.name, r.created),
+            &format!("  {name}    "),
+            "             ",
+            13,
+        );
+    }
+    match (&c.comparison, &c.reason) {
+        (Some(comparison), _) => out += &compare_body(comparison, style),
+        (None, reason) => {
+            out += "\n";
+            out += &wrap(
+                style,
+                &format!(
+                    "not comparable: {}",
+                    reason.as_deref().unwrap_or("unknown reason")
+                ),
+                "  note  ",
+                "        ",
+                8,
+            );
+        }
+    }
+    out
+}
+
+/// `--captures`: one line per stored capture, and files that could not be read.
+pub fn captures_text(
+    dir: &str,
+    captures: &[agentmeter_core::capture::Capture],
+    unreadable: &[(String, String)],
+    style: Style,
+) -> String {
+    let mut out = heading(style, "CAPTURES");
+    out += &wrap(style, dir, "  stored in  ", "             ", 13);
+    if captures.is_empty() && unreadable.is_empty() {
+        out += "  none\n";
+    }
+    for c in captures {
+        let label = c
+            .label
+            .as_ref()
+            .map_or(String::new(), |l| format!(" ({l})"));
+        out += &wrap(
+            style,
+            &format!(
+                "{}{label} · {} · {} to {} · {} requests",
+                c.name,
+                c.tool,
+                &c.facts.from[..10],
+                &c.facts.to[..10],
+                count(c.facts.requests)
+            ),
+            "  ",
+            "    ",
+            2,
+        );
+    }
+    for (name, reason) in unreadable {
+        out += &wrap(
+            style,
+            &format!("{name}: not read, {reason}"),
+            "  ",
+            "    ",
+            2,
+        );
+    }
+    out
 }
 
 #[cfg(test)]

@@ -238,6 +238,13 @@ fn detail(id: &str, views: &[View], period: &str, style: Style) -> String {
                 instructions: None,
                 tool_calls: None,
                 transitions: None,
+                compare: None,
+                subagents: None,
+                skills: None,
+                compaction_causes: None,
+                before_after: None,
+                retention: None,
+                ai_report: None,
             };
             render::text(&report, style)
         })

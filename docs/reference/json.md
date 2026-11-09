@@ -35,14 +35,22 @@ list under it names every field of that object. The tests compare these lists wi
 - `rules` — only with `--findings`: the status of every rule, once each.
 - `probe` — only with `--probe` and only for `claude`: what Claude Code's `/context` reported.
 - `transitions` — only with `--transitions`: starts, resumes and forks, compactions and pauses with the context around them.
+- `compare` — only with `--compare`: two periods side by side with change and denominators.
+- `subagents` — only with `--subagents`: direct and delegated usage per session, overlapping runs and shared files.
+- `compaction_causes` — only with `--compaction-causes` or `--compaction-settings`: compactions by project, model and session with hints at the lever, and with the second flag today's auto-compact setting.
+- `before_after` — only with `--changed-on`: the period before a change date next to the period since it.
 - `tool_calls` — only with `--tool-calls`: repeated reads, repeated failures and large outputs, from tool calls and results.
 - `instructions` — only with `--instructions <dir>`: the instruction files that apply to that directory for this agent.
+- `skills` — only with `--skills`: installed skills called and not observed in the period, with the size of their entries in the session-start skill list.
+- `retention` — only with `--retention`: how long the agent keeps transcripts (Claude Code `cleanupPeriodDays`) and whether the oldest request is close to it.
+- `ai_report` — only with `--ai-report`: the compact diagnosis report for an AI reader (below).
 
 ### `sources[].data_quality`
 
 - `observed_from` — time of the first request in the logs, or `null`.
 - `observed_to` — time of the last request in the logs, or `null`.
 - `requests` — requests after merging duplicates, over the whole logs (not limited by `--since`).
+- `gaps` — days without requests between the first and the last day with requests, over the whole logs; `null` when there is no request. Not an error: a pause and missing logs look the same, the report claims neither.
 - `analysable` — `false` when there is no usage at all; then "no findings" would be misleading.
 - `files` — log files read.
 - `lines` — non-empty lines read.
@@ -64,6 +72,19 @@ list under it names every field of that object. The tests compare these lists wi
 - `placeholder_version_entries` — entries with the placeholder version `0.0.0`.
 - `first_version` — lowest agent version seen, or `null`.
 - `last_version` — highest agent version seen, or `null`.
+
+### `sources[].data_quality.gaps`
+
+UTC calendar days from the first to the last day with a request. The days before the first and
+after the last request are not part of it. `--check data-quality` does not look at it.
+
+- `first_day` — the first day with a request.
+- `last_day` — the last day with a request.
+- `span_days` — days from `first_day` to `last_day`, both included.
+- `active_days` — days in the span with at least one request.
+- `gap_days` — days in the span without a request (`span_days` minus `active_days`); `0` with a `null` `longest_gap` and an empty `periods` when there is none, and also for a single day.
+- `longest_gap` — the longest run of such days as `from`, `to` (both included) and `days`, the first one if several are equally long; `null` without gap.
+- `periods` — every run of gap days in time order, each as `from`, `to` and `days`.
 
 ### `sources[].summary`
 
@@ -253,6 +274,331 @@ measured, not proven avoidable. The compactions are the events the summary count
 - `parent` — resume or fork only: `id` of the session the log names and `in_logs` (that session's log was read); otherwise `null`.
 - `repeats` — compaction only, with `--tool-calls`: `window` (in words), `calls_checked`, `reads`, `reread_areas` (reads of a file and line range read before the compaction and not edited since), `failures_repeated` (identical failed calls repeated) and `examples` (up to three files); otherwise `null`. A count of what happened, not proof the re-read was avoidable.
 
+### `sources[].compare`
+
+The last N days (`later`) against the N days before them (`earlier`), from the same logs and the
+same rules. A change is shown, never explained: it is no verdict on the quality of the work and no
+proof of a cause.
+
+- `verdict` — `compared`, `not_reliable` (a window has too few active days or requests: values, no change) or `no_data` (a window holds no request).
+- `method` — how the figures are made, in words.
+- `earlier` — the window before.
+- `later` — the window up to now.
+- `metrics` — the figures, in a fixed order.
+- `limitations` — what limits the comparison.
+
+### `sources[].compare.earlier`
+
+- `from` — start of the window, included.
+- `to` — end of the window, excluded.
+- `days` — UTC calendar days the window touches; the first and last may be partial.
+- `active_days` — days with at least one request.
+- `days_without_logs` — `days` minus `active_days`.
+- `gaps` — days without requests between the window's first and last day with requests, as in `sources[].data_quality.gaps`; `null` when the window has no request (and in captures made before the field existed).
+- `requests` — requests in the window.
+- `input` — input tokens in the window.
+- `compactions` — compactions in the window.
+- `reliable` — at least 3 active days and 100 requests (uncalibrated).
+- `models` — requests per model, most first: `label`, `count`, `share_pct`.
+- `entrypoints` — main-conversation sessions per front end, most first: `label`, `count`, `share_pct`; `(not recorded)` where the log has none.
+
+### `sources[].compare.later`
+
+- `from` — start of the window, included.
+- `to` — end of the window, excluded.
+- `days` — UTC calendar days the window touches; the first and last may be partial.
+- `active_days` — days with at least one request.
+- `days_without_logs` — `days` minus `active_days`.
+- `gaps` — as in `earlier`.
+- `requests` — requests in the window.
+- `input` — input tokens in the window.
+- `compactions` — compactions in the window.
+- `reliable` — at least 3 active days and 100 requests (uncalibrated).
+- `models` — as in `earlier`.
+- `entrypoints` — as in `earlier`.
+
+### `sources[].compare.metrics[]`
+
+- `name` — `active_days`, `requests_per_active_day`, `input_per_request`, `cache_read_pct`, `compactions_per_1000_requests`, `median_start_context` (`baseline-load` of the window), `sub_agent_pct` or `cache_rebuilds` (`cache-rebuild` of the window).
+- `unit` — unit of the values; `%` for shares.
+- `earlier` — value in the earlier window, or `null` when it cannot be computed (zero denominator, rule not measurable); never zero as a guess.
+- `later` — value in the later window, or `null`.
+- `change` — `later` minus `earlier`, in percentage points for `%`; `null` unless both values exist and both windows are reliable.
+- `change_pct` — relative change in percent; `null` as `change`, and when `earlier` is zero.
+- `denominator_earlier` — what the earlier value was divided by or sampled from.
+- `denominator_later` — the same for the later value.
+- `denominator_unit` — what the denominators count.
+- `note` — why a value is missing where a rule could not measure it, otherwise `null`.
+
+### `sources[].compare.limitations[]`
+
+- `kind` — `empty-window`, `window-not-reliable`, `gaps` (a window has days without requests inside it; named with count and longest run, without saying pause or loss), `model-mix` or `entrypoint-mix` (a model's or front end's share moved by 10 percentage points or more).
+- `text` — the limitation in words.
+
+### `sources[].subagents`
+
+Opt-in with `--subagents`. Requests are split into the direct ones of main sessions and those of
+delegated agents. An agent belongs to a session only where the log names its parent (Claude Code:
+the session folder of the agent's log; Codex: the spawn record, the fork id, or the parent
+history copied into the rollout); a project name or closeness in time never makes a delegation,
+and an agent without a named parent stays unassigned. Replays of parent messages and duplicate
+usage events are dropped as in the summary. With `--tool-calls` the file accesses of the streams
+are compared; without them, or where the log has no file targets (Codex), those fields are `null`
+and `notes` says so.
+
+- `method` — how the report was built.
+- `file_data` — `true` when file targets of tool calls were read and the log records them.
+- `counts` — sessions, agents and overlapping pairs.
+- `totals` — the requests of the period counted once, split three ways.
+- `roots` — the sessions that delegated, with input per direct and delegated use, busiest first.
+- `unassigned` — agents without a usable parent chain, with the fields of `roots[].children`.
+- `overlaps` — pairs of streams whose runs overlap in time, at most 20, those with the most shared files first.
+- `counterexamples` — what looks like the pattern but is not one, with numbers.
+- `notes` — limits of the view.
+
+### `sources[].subagents.counts`
+
+- `sessions` — main sessions with requests in the period.
+- `sessions_with_agents` — of those (or parents whose own log was not read), sessions with at least one assigned agent.
+- `agents` — agent streams with requests in the period, assigned or not.
+- `nested_agents` — assigned agents at depth 2 or more.
+- `max_depth` — the longest chain of named parents from a session, `0` without agents.
+- `unassigned_agents` — agents without a usable parent chain.
+- `overlaps_delegation` — overlapping pairs where one is an ancestor of the other by named parents.
+- `overlaps_same_task` — overlapping agents of one session that are not ancestor and descendant.
+- `overlaps_time_only` — overlapping pairs the logs do not relate in any way.
+
+### `sources[].subagents.totals`
+
+`direct + delegated + unassigned` is `requests`, and `requests` and `input` are the summary's for
+the same period. Inclusive sums (`roots[].inclusive_input`) are derived and never added to these.
+
+- `requests` — requests in the period.
+- `input` — their input: fresh, cache read and cache write.
+- `direct` — usage of main sessions.
+- `delegated` — usage of agents whose parent chain leads to a session.
+- `unassigned` — usage of agents whose parent the logs do not name.
+
+### `sources[].subagents.roots[]`
+
+- `session` — session id the agents name as their root; a parent whose own log was not read still appears.
+- `project` — project name.
+- `in_logs` — `true` when the session's own requests were read.
+- `direct` — the session's own usage.
+- `delegated` — usage of all its agents, nested ones once.
+- `inclusive_input` — `direct.input + delegated.input`, derived for reading.
+- `agents` — assigned agents.
+- `max_depth` — longest chain among them.
+- `first` — first request of session or agents.
+- `last` — last request of session or agents.
+- `span_ms` — last minus first request.
+- `active_ms` — the lengths of the runs added up. The logs hold no run time: a run is a stretch of requests less than an hour apart, its length is first to last request and still contains waiting, and a run of one request has no observed length.
+- `paused_ms` — gaps of an hour or more between runs; `active_ms + paused_ms = span_ms`.
+- `runs` — number of runs.
+- `shared_reads` — areas (file and line range) read by two or more streams of the session; `null` when not measurable.
+- `shared_reads_other_ranges` — files read by two or more streams but never the same lines (counter-example); `null` when not measurable.
+- `shared_writes` — files written by two or more streams; a reason to check, not a conflict; `null` when not measurable.
+- `shared_examples` — up to three file paths among them.
+- `start_context` — first requests of the agents (`agents`, `context`, `fresh`, `cache_read`, `cache_write`), only with two or more agents and recorded cache writes, otherwise `null`. A measure of what was sent, not a verdict on delegating.
+- `children` — the assigned agents, largest input first.
+
+### `sources[].subagents.roots[].direct`
+
+The same fields describe `delegated`, `totals.direct`, `totals.delegated`, `totals.unassigned` and
+`children[].usage`.
+
+- `requests` — requests.
+- `input` — `fresh + cache_read + cache_write`.
+- `fresh` — input neither read from nor written to the cache.
+- `cache_read` — input read from the cache.
+- `cache_write` — input written to the cache.
+- `output` — output tokens.
+- `models` — requests per model name, `unknown` for requests without one.
+
+### `sources[].subagents.roots[].children[]`
+
+- `agent` — the agent's id as the log gives it; `null` when the stream has no agent log of its own.
+- `parent` — the session or agent the log names as parent; `null` when it names none.
+- `parent_basis` — where the log names it: `session_folder` (Claude Code), `spawn_record`, `fork_record` or `copied_history` (Codex; the weakest, taken from parent history copied into the rollout); `null` with the parent.
+- `depth` — steps from the root session along named parents, 1 for a direct child; `null` when the chain does not reach a session.
+- `project` — project name.
+- `file` — the agent's log file, the evidence.
+- `first` — its first request.
+- `last` — its last request.
+- `usage` — its usage, with the fields of `roots[].direct`.
+
+### `sources[].subagents.overlaps[]`
+
+Overlap is between runs of requests and says nothing about conflicting work. `relation` tells a
+delegation the logs name from two streams that merely ran at the same time.
+
+- `first` — session or agent id; the log file when the agent has no id.
+- `first_kind` — `session` or `agent`.
+- `second` — as `first`.
+- `second_kind` — `session` or `agent`.
+- `relation` — `delegation`, `same_task` or `time_only`.
+- `overlap_ms` — time both were in a run; `0` when one run is a single request inside the other.
+- `shared_reads` — areas both read while both were in a run; `null` when not measurable.
+- `shared_writes` — files both wrote while both were in a run; `null` when not measurable.
+- `examples` — up to three of those files.
+- `files` — the two log files the pair is based on.
+
+### `sources[].compaction_causes`
+
+The compactions the summary counts, grouped; nothing is recounted from another source. A pattern
+is worded as a hint with the lever it points to (`setting_or_window` or `working_style`), never
+as the cause. A missing trigger or size stays unknown (always for Codex). Counts and rates use
+the main conversation; a compaction event names no model, so each takes the model of the request
+just before it.
+
+- `method` — how the groups were built.
+- `totals` — all compactions of the period, as a group.
+- `projects` — one group per project with compactions, most compactions first; the fields of `totals`.
+- `models` — one group per model, the same fields; `unknown` when no request names a model.
+- `sessions` — sessions with at least one compaction.
+- `observations` — patterns above the thresholds; empty when there is none.
+- `related_rules` — `compact-thrash`, `big-context` and `long-session` as the findings report them, not recounted.
+- `settings` — only with `--compaction-settings` for `claude`: today's settings files; otherwise `null`.
+- `settings_comparison` — only with `--compaction-settings` for `claude`: today's window against the observed sizes; otherwise empty.
+- `notes` — limits of the view.
+
+### `sources[].compaction_causes.totals`
+
+- `key` — `all` for the totals, else the project, model or session id.
+- `compactions` — compactions in the period.
+- `requests` — main-conversation requests of the group in the period.
+- `per_1000_requests` — compactions per 1,000 of those requests, or `null` without requests.
+- `triggers` — compactions by trigger.
+- `tokens_before` — size before compaction, or `null` without compactions.
+- `without_tokens_after` — compactions whose size after compaction the log does not state (always, for Codex); never counted as zero.
+
+### `sources[].compaction_causes.totals.triggers`
+
+- `auto` — started by the agent when the window filled up.
+- `manual` — started by the user.
+- `unknown` — the log does not say (always for Codex).
+
+### `sources[].compaction_causes.totals.tokens_before`
+
+- `min` — smallest size before compaction, as the log states it (Codex: the context of the last request before the event).
+- `q1` — first quartile.
+- `median` — median.
+- `q3` — third quartile.
+- `max` — largest size.
+
+### `sources[].compaction_causes.sessions[]`
+
+- `key` — session id.
+- `compactions` — compactions of the session.
+- `requests` — main-conversation requests of the session in the period.
+- `per_1000_requests` — compactions per 1,000 requests, or `null`.
+- `triggers` — as in `totals`.
+- `tokens_before` — as in `totals`.
+- `without_tokens_after` — as in `totals`.
+- `project` — project name.
+- `span_ms` — first to last request in the period, idle time included.
+- `peak_context` — the largest context of a request of the session.
+
+#### `sources[].compaction_causes.observations[]`
+
+Not checked against the output by the generic field test; a test of its own does.
+
+- `kind` — `size_band` (automatic compactions of one model began within a narrow band, as a fixed limit produces), `long_sessions` (half of the compactions or more fell in sessions of more than 24 hours) or `concentrated` (one project holds half of the compactions or more while others exist).
+- `scope` — model name, project name or `all`.
+- `message` — the observation in words.
+- `compactions` — compactions the observation counts.
+- `of` — compactions of the scope it is taken from.
+- `lever` — `setting_or_window` or `working_style`.
+- `certainty` — always `hint`: a pattern in the logs, not a cause.
+- `see_rule` — the rule that already reports the same behaviour (`long-session`, `big-context`), else `null`; the observation counts compactions in it and is not a second finding.
+- `check` — what to check and where an effect would show.
+
+### `sources[].compaction_causes.related_rules[]`
+
+- `rule` — `compact-thrash`, `big-context` or `long-session`.
+- `status` — `observed`, `checked_none` or `not_measurable`, as in `rules`.
+- `message` — what the rule measured, or `null`.
+- `reason` — why it could not be measured, or `null`.
+
+### `sources[].compaction_causes.settings`
+
+Only the auto-compact keys of the Claude Code settings files, and only with
+`--compaction-settings`. The files are read as they are now; the content is never attributed to
+compactions of the past. Managed settings, `CLAUDE_CODE_AUTO_COMPACT_WINDOW` and `--autocompact`
+are not visible here and take precedence over the files.
+
+- `reference` — the documentation and versions the keys come from: `autoCompactWindow` (100000 to 1000000 tokens, any settings file), `modelSettings.<model>.autoCompactWindow` (a number or `"auto"`, Claude Code 2.1.288 or later; before it `/autocompact` saved the top-level key) and `autoCompactEnabled`.
+- `as_of` — says that the files are read as they are now.
+- `files` — every file looked at, with its state.
+- `windows` — the window settings found.
+- `auto_compact_enabled` — `autoCompactEnabled` values found.
+- `projects_not_read` — projects whose working directory is unknown or gone, so their project and local settings were not looked at (unknown, not absent).
+
+### `sources[].compaction_causes.settings.files[]`
+
+User settings (`settings.json` of each configuration directory) and, per project, `.claude/settings.json` and `.claude/settings.local.json` in the working directory of its latest session.
+
+- `path` — the file.
+- `scope` — `user`, `project` or `local`.
+- `project` — project name for `project` and `local`, else `null`.
+- `state` — `read`, `missing`, `unreadable` or `invalid_json`.
+
+### `sources[].compaction_causes.settings.windows[]`
+
+- `file` — the file the entry is from.
+- `scope` — `user`, `project` or `local`.
+- `project` — project name for `project` and `local`, else `null`.
+- `model` — the model of a `modelSettings` entry, `null` for every model.
+- `tokens` — as written, `null` for `"auto"` (the window tuned for the model, not stated in the logs).
+- `note` — set when the number lies outside 100,000 to 1,000,000, which Claude Code limits it to.
+
+### `sources[].compaction_causes.settings.auto_compact_enabled[]`
+
+- `file` — the file the entry is from.
+- `scope` — `user`, `project` or `local`.
+- `project` — project name for `project` and `local`, else `null`.
+- `enabled` — `autoCompactEnabled` as written; `false` turns automatic compaction off.
+
+### `sources[].compaction_causes.settings_comparison[]`
+
+One entry per project and model with compactions. The window that applies today is the first of local, project and user settings; in a file the entry for the model comes before the general one. A hint, not proof.
+
+- `project` — project name.
+- `model` — model of the compactions (the request before each).
+- `setting` — the window that applies, with the fields of `windows[]`, or `null` when none is set.
+- `auto_compact_enabled` — `autoCompactEnabled` that applies, or `null`.
+- `automatic_compactions` — automatic compactions of the pair with a known size.
+- `median_tokens_before` — their median, or `null`.
+- `max_tokens_before` — their largest, or `null`.
+- `median_share_of_window_pct` — the median as a percent of the window, or `null`.
+- `above_window` — automatic compactions larger than the window.
+- `fit` — `within` (median 70 to 105 percent of the window), `below`, `above`, `no_setting`, `auto_value` or `not_measurable`; the limits are uncalibrated.
+- `message` — the comparison in words, marked as today's setting.
+
+### `sources[].before_after`
+
+The period from the date the user gave up to now (`later`) against an equally long period ending
+at that date (`earlier`), computed by the same function as `compare`. The date is the user's;
+nothing is detected. A difference is shown, never attributed to the change.
+
+- `change_point` — the given day, 00:00 UTC.
+- `label` — the user's name for the change (`--change-label`), otherwise `null`.
+- `period_days` — calendar days each period covers; `0` when the date is not in the past.
+- `notice` — in words: the difference is no effect of the change.
+- `comparison` — the comparison of the two periods.
+
+### `sources[].before_after.comparison`
+
+Same content as `sources[].compare`, including its objects `earlier`, `later`, `metrics[]` and
+`limitations[]`.
+
+- `verdict` — `compared`, `not_reliable` or `no_data`, as in `compare`.
+- `method` — how the figures are made, in words.
+- `earlier` — the period before the change date.
+- `later` — the period from the change date to now.
+- `metrics` — the figures, in a fixed order.
+- `limitations` — what limits the comparison, among them model and front-end shifts and periods that are too short.
+
 ### `sources[].tool_calls`
 
 Opt-in: message content is opened for call ids, tool names, file paths of file tools, a hash of
@@ -330,6 +676,215 @@ Today's files, not the history. Sizes are bytes; tokens are estimated as bytes �
 - `certainty` — `high`, `medium` or `low`.
 - `check` — one concrete step to check it.
 
+### `sources[].skills`
+
+Opt-in. Message content is opened only for the skill name of `Skill` tool calls (arguments are
+not kept); the installed skills are read from the headers of their `SKILL.md` files for the name
+and the length of the description, never the content. A skill without a call in the period is
+`not observed`, not `never used`: a skill started by hand with `/name` is not in the log in a form
+this reads. Sizes are bytes of the listing entry (name plus `description` and `when_to_use`, cut
+at 1,536 characters); tokens are estimated as bytes ÷ 4, never counted, and the two are not
+equated. Codex logs no skill calls: its `status` is `not_measurable` and nothing is scanned.
+
+- `method` — how calls and sizes were read.
+- `rules_version` — the skill-loading rules the scan follows and the documentation they come from.
+- `status` — `observed` (listed skills without a call), `checked_none` or `not_measurable`.
+- `reason` — why it is not measurable; otherwise `null`.
+- `message` — what was measured; otherwise `null`.
+- `calls` — skill calls in the selected period.
+- `installed` — skills the scan found.
+- `listed` — of these, skills whose entry is in the list sent at session start.
+- `user_only` — skills with `disable-model-invocation: true`: no list entry, never counted as unused.
+- `unreadable` — skills whose `SKILL.md` could not be read.
+- `used` — skills with at least one call in the period.
+- `unused_listed` — listed skills without a call in the period.
+- `listed_bytes` — bytes of all listed entries (estimate); `listed_est_tokens` is that as estimated tokens.
+- `listed_est_tokens` — `listed_bytes` as estimated tokens.
+- `unused_bytes` — bytes of the entries of `unused_listed` (estimate); `unused_est_tokens` is that as estimated tokens.
+- `unused_est_tokens` — `unused_bytes` as estimated tokens.
+- `largest_unused` — up to five entries of `unused_listed`, largest first, with the fields of `skills[]`.
+- `skills` — every scanned skill, most called first.
+- `called_not_scanned` — skills called in the period that are not among the scanned ones (built in, synced from claude.ai, nested or added directories, removed since).
+- `probe` — with `--probe` and a run in an empty directory: that run's `Skills` figure next to the scan; otherwise `null`.
+- `next_step` — what to check, for `observed`; otherwise `null`.
+- `notes` — limits of the scan: missing or unreadable directories, name clashes, plugins left out, what is not covered.
+
+### `sources[].skills.skills[]`
+
+- `name` — the name a call uses; plugin skills as `plugin:skill`.
+- `source` — `user`, `project` or `plugin`.
+- `path` — absolute path of the `SKILL.md`.
+- `state` — `listed`, `user_only` or `unreadable`.
+- `calls` — calls in the selected period.
+- `last_used` — time of the latest call in all logs read (not limited by `--since`), or `null`.
+- `list_bytes` — bytes of the listing entry (estimate); 0 unless listed.
+- `list_est_tokens` — `list_bytes` as estimated tokens.
+
+### `sources[].skills.called_not_scanned[]`
+
+- `name` — the skill name as called.
+- `calls` — calls in the selected period.
+- `last_used` — time of the latest call in all logs read, or `null`.
+
+### `sources[].skills.probe`
+
+- `place` — the probe run used (`empty directory`).
+- `probe_tokens` — tokens of the category `Skills` in `/context`, as Claude Code estimates them (`< 20` style cells are read as their limit).
+- `scanned_est_tokens` — estimated tokens of the listed user and plugin skills the scan found. The two cover different sets (the probe also counts built-in and claude.ai skills) and are shown side by side, not reconciled.
+
+### `sources[].retention`
+
+Only with `--retention`; the settings files are read only then. Claude Code only: for Codex the
+object has `measurable` `false` and the reason in `note`, everything else empty or `null`. Codex
+CLI has no setting that deletes session files by age (checked 2026-11: `history.max_bytes` caps
+`history.jsonl`, not the session logs), so its retention is not measurable.
+
+- `measurable` — `false` when the source has no such setting.
+- `key` — the setting, `cleanupPeriodDays`.
+- `reference` — where the key is documented and from when: Claude Code settings reference as checked in 2026-11 (whole number of days, at least 1, default 30, valid in any settings file; the documentation names no version for it).
+- `default_days` — the documented default, `30`; `null` when not measurable.
+- `files` — every settings file looked at, with its state.
+- `values` — the `cleanupPeriodDays` entries found.
+- `projects_not_read` — projects whose working directory is unknown or gone, so their project and local settings were not looked at (unknown, not absent).
+- `effective_days` — the retention the oldest request is compared with: the shortest value found, else the default; `null` when a value is unusable or the source has none. Managed settings and command-line settings are not read and take precedence.
+- `basis` — `settings` or `default`; `null` where `effective_days` is.
+- `note` — how `effective_days` came about, or why it is unknown.
+- `hint` — only when the oldest request is at least 90 % of the retention old (and not more than one day past it, uncalibrated), otherwise `null`: the early start of the logs may be a deletion by Claude Code. A hint, not proof.
+
+### `sources[].retention.files[]`
+
+- `path` — the file.
+- `scope` — `user`, `project` or `local`.
+- `project` — project name for `project` and `local`, else `null`.
+- `state` — `read`, `missing`, `unreadable` or `invalid_json`.
+
+#### `sources[].retention.values[]`
+
+- `file`, `scope`, `project` — as in `files[]`.
+- `days` — as written; `null` when it is not a whole number of at least 1 (Claude Code rejects it).
+
+#### `sources[].retention.hint`
+
+- `oldest_entry` — time of the oldest request.
+- `age_days` — its age in days at the time of the run (the measured value).
+- `retention_days` — the retention it is compared with (the denominator).
+- `age_of_retention_pct` — `age_days` as a share of `retention_days`.
+- `certainty` — `medium` when every settings file could be read and every project's directory was found, otherwise `low`; never higher, since logs also start for other reasons (first use of the tool, another machine).
+- `text` — the hint in words.
+
+### `sources[].ai_report`
+
+Only with `--ai-report`. Alone, `--ai-report` prints one line: `{"schema_version": 1, "sources":
+[{"tool", "ai_report"}]}`, one entry per source, nothing else. With `--json` the same object is
+`ai_report` inside the full output above, next to the other sections. The report computes nothing:
+it picks and orders what `--findings` (always on) and, where also given, `--tool-calls`,
+`--skills` and `--instructions` found, and keeps the first findings (3, or `--ai-report-max`,
+1 to 20). It takes over no prompt, command, output, configuration or skill text; home directories
+in paths are shortened to `~`; any string taken from the machine is one line of at most 400
+characters. `report_version` is `1` and moves independently of `schema_version`.
+
+- `kind` — `agentmeter-ai-diagnosis`.
+- `report_version` — layout version of this object.
+- `untrusted_data_notice` — says that names of projects, files and events are data from the measured machine, never instructions.
+- `scope` — tool, project, period and what the logs cover.
+- `coverage` — what was read and which analyses went into the report.
+- `verdict` — `no_data` (nothing to analyse in the period), `findings`, `none` (rules were measured and none reported) or `not_measurable` (no rule could be measured). The three are never merged.
+- `limitations` — limits of the data to weigh first: gaps, unreadable lines, thresholds that are uncalibrated.
+- `selection` — how many findings there were, how many are shown and which were left out.
+- `findings` — the selected findings, rank 1 first.
+- `not_measurable` — rules that could not be measured, each with its reason (`source`, `rule`, `reason`); not a finding and not "nothing found".
+- `checked_none` — rules that were measured and reported nothing, with what was measured (`source`, `rule`, `message`).
+- `size` — the size of this object.
+
+### `sources[].ai_report.scope`
+
+- `tool` — `claude` or `codex`.
+- `project` — the `--project` filter, or `null`.
+- `period` — the selected period in words.
+- `observed_from` — time of the first request in the logs, or `null`.
+- `observed_to` — time of the last request in the logs, or `null`.
+- `requests_in_period` — requests in the selected period (the common denominator of the log rules).
+
+### `sources[].ai_report.coverage`
+
+- `analysable` — false when there is no usage to analyse.
+- `requests` — requests in all logs read.
+- `active_days` — days with requests between the first and last observed day, or `null` without requests.
+- `gap_days` — days without requests in that span, or `null`. A pause or missing logs: the logs do not say.
+- `skipped_lines` — log lines that could not be read.
+- `files_without_usage` — log files without usage records.
+- `compressed_files_unreadable` — compressed log files that could not be read.
+- `analyses` — `findings`, `tool_calls`, `skills` and `instructions`, each `included` or `not_requested`; a rule of a report that was not requested is not a rule with nothing found.
+- `not_condensed` — other selected reports (`summary`, `compare`, ...) that are not part of this report; their details need `--json`.
+
+### `sources[].ai_report.coverage.analyses[]`
+
+- `name` — `findings`, `tool_calls`, `skills` or `instructions`.
+- `status` — `included` or `not_requested`.
+
+### `sources[].ai_report.selection`
+
+- `limit` — findings kept at most.
+- `candidates` — findings there were before the limit.
+- `shown` — findings in `findings`.
+- `omitted` — `candidates` minus `shown`.
+- `order` — the order in words: level, then certainty, then whether the rule names something the user controls, then source, then rule and evidence. Measures with different units are neither added nor compared, so the order says nothing about size.
+- `omitted_items` — what was left out: `source`, `rule`, `level`, `certainty`.
+- `details` — where the complete details are.
+
+### `sources[].ai_report.findings[]`
+
+- `rank` — 1 is first.
+- `source` — `findings`, `tool_calls`, `skills` or `instructions`: the report the finding comes from, whose rule and numbers are used as they are.
+- `rule` — rule id.
+- `rule_version` — version of the rule, `null` where the source has none.
+- `level` — `finding`, `notice` or `info`; rules of `--tool-calls`, `--skills` and `--instructions` count as `info`.
+- `measured` — what the log or the files show.
+- `uncertainty` — what weakens it.
+- `hypothesis` — a guess, kept apart from the measurement.
+- `check` — what to look at first (the rule's next step).
+- `potential_change` — a possible change as words, only where the rule's conclusion names a setting or habit the user controls (`lever`), else `null`. No concrete configuration value is ever suggested.
+- `success_measure` — how an improvement would show: the same measure, measured again.
+- `details_in_json` — the key of the full `--json` output that holds the complete diagnosis.
+
+### `sources[].ai_report.findings[].measured`
+
+- `observation` — the rule's message, with its numbers.
+- `certainty` — `observed`, `likely` or `suspected`.
+- `measure` — the number with its denominator and sample; `null` for instruction findings, whose measure is the sentence in `observation`.
+- `evidence` — up to 3 references (`file`, `event`; `event` is `null` for files); a log file is relative to the projects directory.
+
+#### `sources[].ai_report.findings[].measured.evidence[]`
+
+- `file` — a log file or instruction file; instruction files have their home directory shortened to `~`.
+- `event` — the event id in that log file, or `null`.
+
+### `sources[].ai_report.findings[].measured.measure`
+
+- `name` — what was measured.
+- `value` — the measured number.
+- `unit` — its unit.
+- `denominator` — what it was measured against.
+- `denominator_unit` — the unit of the denominator.
+- `sample` — how many things the rule looked at.
+- `sample_unit` — what they are.
+
+### `sources[].ai_report.findings[].uncertainty`
+
+- `counterexamples` — cases that look like the pattern but are not, as the rule states them.
+- `limits` — how far the observation carries: thresholds uncalibrated, certainty, notes of the source.
+
+### `sources[].ai_report.findings[].hypothesis`
+
+- `kind` — the rule's own reading: `lever`, `look` or `fine`, or `none` where the rule offers no explanation.
+- `text` — the interpretation, or `null`.
+- `label` — says that it is an interpretation, not a verified cause.
+
+### `sources[].ai_report.size`
+
+- `bytes` — bytes of `ai_report` printed on one line, this field included. Bytes, not model tokens.
+- `note` — says so.
+
 ## `--check data-quality`
 
 `agentmeter --check data-quality --json` prints a different, smaller object, also with
@@ -343,3 +898,43 @@ Today's files, not the history. Sizes are bytes; tokens are estimated as bytes �
 The exit status is `0` if all sources passed, `1` if one failed (unreadable lines or compressed
 files over the limits, or no usage in the selected period) and `2` for a bad call. Notices and info
 from the rules never fail the check.
+
+## Captures
+
+`--capture <name> --since <period>` writes the figures of that period, up to now, of one source to
+a local file; nothing is written unless you ask. The figures are the ones of `--compare`. A capture
+holds aggregated numbers and labels (model and front-end names, project filter, your change
+label), never conversation, source code, tool calls, session or message ids, or configuration
+text. Values from `--probe` are not part of it.
+
+- Location: `$AGENTMETER_DATA_DIR/captures`, else `$XDG_DATA_HOME/agentmeter/captures`, else `~/.local/share/agentmeter/captures`; one file `<name>.json` per capture. A name has letters, digits, `-`, `_` and `.`, up to 64, and does not start with a dot.
+- `--capture` does not overwrite; `--delete-capture <name>` removes the file, deleting the file by hand works as well. `--captures` lists them, `--compare-captures <earlier> <later>` compares two.
+- A file with another `schema_version` than this version reads is listed as unreadable and is not compared.
+
+#### Capture file
+
+Pretty-printed JSON, also what `--capture --json` prints.
+
+- `schema_version` — layout version of the file, `1`.
+- `name` — the name it is stored under.
+- `label` — your name for a change (`--change-label`), otherwise `null`.
+- `created` — when it was made (UTC).
+- `tool` — `claude` or `codex`.
+- `project` — the `--project` filter, otherwise `null`.
+- `rules` — version of each rule whose figure is kept (`baseline-load`, `cache-rebuild`).
+- `data_quality` — `files`, `skipped_lines`, `files_without_usage`, `compressed_files_unreadable` and `analysable` of the source when it was made.
+- `facts` — the period as in `sources[].compare.earlier`.
+- `figures` — per figure of `sources[].compare.metrics[]`: `name`, `value` (`null` where it could not be computed), `denominator` and `note`.
+
+#### `--compare-captures --json`
+
+An object with `schema_version` and `capture_comparison`:
+
+- `comparable` — `false` when the captures are from different sources, projects or rule versions; no figure is given then.
+- `reason` — why not, otherwise `null`.
+- `earlier` and `later` — `name`, `label`, `created` of each capture.
+- `comparison` — as `sources[].compare` (same rules, thresholds and limitations; a `windows-overlap` limitation is added when the periods overlap), or `null` when not comparable.
+
+#### `--captures --json`
+
+An object with `schema_version`, `directory`, `captures` (`name`, `label`, `created`, `tool`, `project`, `from`, `to`, `requests`) and `unreadable` (`name` and `reason`).
