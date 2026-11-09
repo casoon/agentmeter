@@ -80,6 +80,10 @@ pub struct Options {
     pub change_label: Option<String>,
     /// What to do with local captures.
     pub capture: Option<CaptureAction>,
+    /// Print the compact diagnosis report for an AI reader; implies findings.
+    pub ai_report: bool,
+    /// Findings the AI report keeps.
+    pub ai_report_max: Option<usize>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -152,6 +156,21 @@ where
                 options.compaction_causes = true;
             }
             "--retention" => options.retention = true,
+            "--ai-report" => {
+                options.ai_report = true;
+                options.findings = true;
+            }
+            "--ai-report-max" => match args.next().and_then(|v| v.parse::<usize>().ok()) {
+                Some(n) if (1..=agentmeter_core::ai_report::MAX_LIMIT).contains(&n) => {
+                    options.ai_report_max = Some(n)
+                }
+                _ => {
+                    return Invocation::Error(format!(
+                        "--ai-report-max needs a number from 1 to {}",
+                        agentmeter_core::ai_report::MAX_LIMIT
+                    ));
+                }
+            },
             "--changed-on" => match args.next() {
                 Some(value) => match parse_date_ms(&value) {
                     Some(ms) => options.changed_on = Some(ms),
@@ -245,6 +264,9 @@ where
         return Invocation::Error(
             "--probe asks Claude Code; it does not apply to codex".to_owned(),
         );
+    }
+    if options.ai_report_max.is_some() && !options.ai_report {
+        return Invocation::Error("--ai-report-max needs --ai-report".to_owned());
     }
     if options.compare.is_some() && options.since.is_some() {
         return Invocation::Error(
@@ -376,6 +398,18 @@ Options:
                          across other sources, projects or rule versions.
       --delete-capture <name>
                          Delete a capture.
+      --ai-report        A compact, machine-readable diagnosis for an AI to evaluate (JSON, own
+                         layout): the top findings of --findings and, where you also give them,
+                         of --tool-calls, --skills and --instructions, each with what was
+                         measured, what is uncertain, what is only a guess, what to check and how
+                         an improvement would show; plus data coverage and limits. At most 3
+                         findings (--ai-report-max), in a fixed order; the rest is counted and
+                         named. No prompt, command, output, configuration or skill text; home
+                         directories shortened to ~. Calls no model, changes nothing. Implies
+                         --findings; with --json the report is added as `ai_report` to the
+                         full output instead.
+      --ai-report-max <n>
+                         Findings the AI report keeps, 1 to 20 (default 3).
       --json             Print JSON instead of text (schema: docs/reference/json.md)
       --check <name>     data-quality: exit 1 if a source has unreadable data or none to
                          analyse, 0 otherwise, 2 for a bad call. Findings never fail it.
@@ -575,6 +609,22 @@ mod tests {
             &["--delete-capture"],
             &["--compare-captures", "a"],
             &["--captures", "--delete-capture", "a"],
+        ] {
+            assert!(matches!(run(bad), Invocation::Error(_)), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn ai_report_implies_findings_and_its_limit_needs_it() {
+        let Invocation::Run(options) = run(&["--ai-report", "--ai-report-max", "5"]) else {
+            panic!("expected a run");
+        };
+        assert!(options.ai_report && options.findings && !options.summary);
+        assert_eq!(options.ai_report_max, Some(5));
+        for bad in [
+            &["--ai-report-max", "5"][..],
+            &["--ai-report", "--ai-report-max", "0"],
+            &["--ai-report", "--ai-report-max", "x"],
         ] {
             assert!(matches!(run(bad), Invocation::Error(_)), "{bad:?}");
         }

@@ -85,6 +85,8 @@ pub struct Analysis {
     pub before_after: Option<agentmeter_core::before_after::BeforeAfter>,
     /// What `--retention` found.
     pub retention: Option<agentmeter_core::gaps::Retention>,
+    /// What `--ai-report` condensed from the analyses above.
+    pub ai_report: Option<agentmeter_core::ai_report::AiReport>,
 }
 
 pub fn read_sources(tool: Tool) -> Vec<Source> {
@@ -151,6 +153,7 @@ pub fn analyse(source: &Source, options: &Options, now_ms: i64, probe: Option<Pr
             .then(|| evaluate(dataset, since_ms, probe.as_ref())),
         probe,
         instructions: None,
+        ai_report: None,
         compare: options.compare.map(|days| {
             let (earlier, later) = agentmeter_core::compare::windows_before(now_ms, days);
             agentmeter_core::compare::compare(dataset, earlier, later)
@@ -381,6 +384,9 @@ fn run(options: &Options, interactive: bool) -> ExitCode {
                 analysis.instructions =
                     Some(scan_instructions(s.tool, dir, analysis.probe.as_ref()));
             }
+            if options.ai_report {
+                analysis.ai_report = Some(ai_report(s, &analysis, options, &period));
+            }
             analysis
         })
         .collect();
@@ -421,9 +427,12 @@ fn run(options: &Options, interactive: bool) -> ExitCode {
             compaction_causes: a.compaction_causes.as_ref(),
             before_after: a.before_after.as_ref(),
             retention: a.retention.as_ref(),
+            ai_report: a.ai_report.as_ref(),
         })
         .collect();
-    if options.json {
+    if options.ai_report && !options.json {
+        println!("{}", render::ai_report_json(&reports));
+    } else if options.json {
         println!("{}", render::json(&reports));
     } else {
         let terminal = std::io::stdout().is_terminal();
@@ -433,6 +442,49 @@ fn run(options: &Options, interactive: bool) -> ExitCode {
         print!("{}", blocks.join("\n"));
     }
     ExitCode::SUCCESS
+}
+
+/// The AI report of one source, from the analyses the run made.
+fn ai_report(
+    source: &Source,
+    analysis: &Analysis,
+    options: &Options,
+    period: &str,
+) -> agentmeter_core::ai_report::AiReport {
+    let not_condensed: Vec<&'static str> = [
+        (options.summary, "summary"),
+        (options.sessions, "sessions"),
+        (options.projects, "projects"),
+        (options.probe, "probe"),
+        (options.transitions, "transitions"),
+        (options.compare.is_some(), "compare"),
+        (options.subagents, "subagents"),
+        (options.compaction_causes, "compaction_causes"),
+        (options.changed_on.is_some(), "before_after"),
+        (options.retention, "retention"),
+    ]
+    .into_iter()
+    .filter_map(|(on, name)| on.then_some(name))
+    .collect();
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .ok();
+    agentmeter_core::ai_report::build(&agentmeter_core::ai_report::Input {
+        tool: source.tool,
+        project: options.project.as_deref(),
+        period,
+        quality: &analysis.quality,
+        requests_in_period: analysis.requests_in_period,
+        findings: analysis.findings.as_ref(),
+        tool_calls: analysis.tool_calls.as_ref(),
+        instructions: analysis.instructions.as_ref(),
+        skills: analysis.skills.as_ref(),
+        not_condensed,
+        home: home.as_deref(),
+        limit: options
+            .ai_report_max
+            .unwrap_or(agentmeter_core::ai_report::DEFAULT_LIMIT),
+    })
 }
 
 /// Why a source cannot say which skills were called.

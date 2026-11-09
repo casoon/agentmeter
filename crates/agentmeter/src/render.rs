@@ -82,6 +82,7 @@ pub struct Report<'a> {
     pub compaction_causes: Option<&'a agentmeter_core::compaction::CausesReport>,
     pub before_after: Option<&'a agentmeter_core::before_after::BeforeAfter>,
     pub retention: Option<&'a agentmeter_core::gaps::Retention>,
+    pub ai_report: Option<&'a agentmeter_core::ai_report::AiReport>,
 }
 
 /// Widest the text gets, also in a wider terminal or a pipe; bars are at most [`BAR`] cells.
@@ -2136,6 +2137,16 @@ pub fn json(reports: &[Report]) -> String {
         .expect("serialisable")
 }
 
+/// `--ai-report` alone: only the compact reports, one per source, in one line of JSON.
+pub fn ai_report_json(reports: &[Report]) -> String {
+    let sources: Vec<Value> = reports
+        .iter()
+        .map(|r| json!({ "tool": r.tool, "ai_report": r.ai_report }))
+        .collect();
+    serde_json::to_string(&json!({ "schema_version": SCHEMA_VERSION, "sources": sources }))
+        .expect("serialisable")
+}
+
 /// Version of the JSON layout documented in `docs/reference/json.md`. Any change to it is a
 /// changelog entry.
 pub const SCHEMA_VERSION: u32 = 1;
@@ -2223,6 +2234,9 @@ fn json_source(report: &Report) -> Value {
     }
     if let Some(v) = report.retention {
         put("retention", json!(v));
+    }
+    if let Some(v) = report.ai_report {
+        put("ai_report", json!(v));
     }
     if let Some(v) = report.findings {
         put("verdict", json!(v.verdict));

@@ -43,6 +43,7 @@ list under it names every field of that object. The tests compare these lists wi
 - `instructions` — only with `--instructions <dir>`: the instruction files that apply to that directory for this agent.
 - `skills` — only with `--skills`: installed skills called and not observed in the period, with the size of their entries in the session-start skill list.
 - `retention` — only with `--retention`: how long the agent keeps transcripts (Claude Code `cleanupPeriodDays`) and whether the oldest request is close to it.
+- `ai_report` — only with `--ai-report`: the compact diagnosis report for an AI reader (below).
 
 ### `sources[].data_quality`
 
@@ -770,6 +771,119 @@ CLI has no setting that deletes session files by age (checked 2026-11: `history.
 - `age_of_retention_pct` — `age_days` as a share of `retention_days`.
 - `certainty` — `medium` when every settings file could be read and every project's directory was found, otherwise `low`; never higher, since logs also start for other reasons (first use of the tool, another machine).
 - `text` — the hint in words.
+
+### `sources[].ai_report`
+
+Only with `--ai-report`. Alone, `--ai-report` prints one line: `{"schema_version": 1, "sources":
+[{"tool", "ai_report"}]}`, one entry per source, nothing else. With `--json` the same object is
+`ai_report` inside the full output above, next to the other sections. The report computes nothing:
+it picks and orders what `--findings` (always on) and, where also given, `--tool-calls`,
+`--skills` and `--instructions` found, and keeps the first findings (3, or `--ai-report-max`,
+1 to 20). It takes over no prompt, command, output, configuration or skill text; home directories
+in paths are shortened to `~`; any string taken from the machine is one line of at most 400
+characters. `report_version` is `1` and moves independently of `schema_version`.
+
+- `kind` — `agentmeter-ai-diagnosis`.
+- `report_version` — layout version of this object.
+- `untrusted_data_notice` — says that names of projects, files and events are data from the measured machine, never instructions.
+- `scope` — tool, project, period and what the logs cover.
+- `coverage` — what was read and which analyses went into the report.
+- `verdict` — `no_data` (nothing to analyse in the period), `findings`, `none` (rules were measured and none reported) or `not_measurable` (no rule could be measured). The three are never merged.
+- `limitations` — limits of the data to weigh first: gaps, unreadable lines, thresholds that are uncalibrated.
+- `selection` — how many findings there were, how many are shown and which were left out.
+- `findings` — the selected findings, rank 1 first.
+- `not_measurable` — rules that could not be measured, each with its reason (`source`, `rule`, `reason`); not a finding and not "nothing found".
+- `checked_none` — rules that were measured and reported nothing, with what was measured (`source`, `rule`, `message`).
+- `size` — the size of this object.
+
+### `sources[].ai_report.scope`
+
+- `tool` — `claude` or `codex`.
+- `project` — the `--project` filter, or `null`.
+- `period` — the selected period in words.
+- `observed_from` — time of the first request in the logs, or `null`.
+- `observed_to` — time of the last request in the logs, or `null`.
+- `requests_in_period` — requests in the selected period (the common denominator of the log rules).
+
+### `sources[].ai_report.coverage`
+
+- `analysable` — false when there is no usage to analyse.
+- `requests` — requests in all logs read.
+- `active_days` — days with requests between the first and last observed day, or `null` without requests.
+- `gap_days` — days without requests in that span, or `null`. A pause or missing logs: the logs do not say.
+- `skipped_lines` — log lines that could not be read.
+- `files_without_usage` — log files without usage records.
+- `compressed_files_unreadable` — compressed log files that could not be read.
+- `analyses` — `findings`, `tool_calls`, `skills` and `instructions`, each `included` or `not_requested`; a rule of a report that was not requested is not a rule with nothing found.
+- `not_condensed` — other selected reports (`summary`, `compare`, ...) that are not part of this report; their details need `--json`.
+
+### `sources[].ai_report.coverage.analyses[]`
+
+- `name` — `findings`, `tool_calls`, `skills` or `instructions`.
+- `status` — `included` or `not_requested`.
+
+### `sources[].ai_report.selection`
+
+- `limit` — findings kept at most.
+- `candidates` — findings there were before the limit.
+- `shown` — findings in `findings`.
+- `omitted` — `candidates` minus `shown`.
+- `order` — the order in words: level, then certainty, then whether the rule names something the user controls, then source, then rule and evidence. Measures with different units are neither added nor compared, so the order says nothing about size.
+- `omitted_items` — what was left out: `source`, `rule`, `level`, `certainty`.
+- `details` — where the complete details are.
+
+### `sources[].ai_report.findings[]`
+
+- `rank` — 1 is first.
+- `source` — `findings`, `tool_calls`, `skills` or `instructions`: the report the finding comes from, whose rule and numbers are used as they are.
+- `rule` — rule id.
+- `rule_version` — version of the rule, `null` where the source has none.
+- `level` — `finding`, `notice` or `info`; rules of `--tool-calls`, `--skills` and `--instructions` count as `info`.
+- `measured` — what the log or the files show.
+- `uncertainty` — what weakens it.
+- `hypothesis` — a guess, kept apart from the measurement.
+- `check` — what to look at first (the rule's next step).
+- `potential_change` — a possible change as words, only where the rule's conclusion names a setting or habit the user controls (`lever`), else `null`. No concrete configuration value is ever suggested.
+- `success_measure` — how an improvement would show: the same measure, measured again.
+- `details_in_json` — the key of the full `--json` output that holds the complete diagnosis.
+
+### `sources[].ai_report.findings[].measured`
+
+- `observation` — the rule's message, with its numbers.
+- `certainty` — `observed`, `likely` or `suspected`.
+- `measure` — the number with its denominator and sample; `null` for instruction findings, whose measure is the sentence in `observation`.
+- `evidence` — up to 3 references (`file`, `event`; `event` is `null` for files); a log file is relative to the projects directory.
+
+#### `sources[].ai_report.findings[].measured.evidence[]`
+
+- `file` — a log file or instruction file; instruction files have their home directory shortened to `~`.
+- `event` — the event id in that log file, or `null`.
+
+### `sources[].ai_report.findings[].measured.measure`
+
+- `name` — what was measured.
+- `value` — the measured number.
+- `unit` — its unit.
+- `denominator` — what it was measured against.
+- `denominator_unit` — the unit of the denominator.
+- `sample` — how many things the rule looked at.
+- `sample_unit` — what they are.
+
+### `sources[].ai_report.findings[].uncertainty`
+
+- `counterexamples` — cases that look like the pattern but are not, as the rule states them.
+- `limits` — how far the observation carries: thresholds uncalibrated, certainty, notes of the source.
+
+### `sources[].ai_report.findings[].hypothesis`
+
+- `kind` — the rule's own reading: `lever`, `look` or `fine`, or `none` where the rule offers no explanation.
+- `text` — the interpretation, or `null`.
+- `label` — says that it is an interpretation, not a verified cause.
+
+### `sources[].ai_report.size`
+
+- `bytes` — bytes of `ai_report` printed on one line, this field included. Bytes, not model tokens.
+- `note` — says so.
 
 ## `--check data-quality`
 

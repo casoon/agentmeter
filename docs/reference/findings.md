@@ -198,6 +198,28 @@ nested and added-directory skills, skills synced from claude.ai, built-in skills
 `skillOverrides` and plugin enablement in project settings; a skill called but not found is
 listed apart.
 
+## AI report
+
+`--ai-report` is a view of the diagnoses above, not a rule of its own: it recomputes no value and
+adds no rule. Candidates are the observed findings of `--findings` and, where the flag was given,
+the observed rules of `--tool-calls`, the `unused-skills` rule of `--skills` and the findings of
+`--instructions`. They are ordered by the level the rule reported (the rules of the other three
+sources count as `info`), then its certainty (`observed`, `likely`, `suspected`), then whether its
+conclusion names a lever the user controls (`lever`, `look`, `fine`, none), then the source, then
+rule and evidence; the order is the same for the same input. Measures of different units (tokens,
+calls, rebuilds) are never added or compared, so the order is not a ranking by size or saving.
+The first three are kept (`--ai-report-max` 1 to 20) and the others listed by source, rule, level
+and certainty; their details stay in `--json`.
+
+Each finding keeps measurement, uncertainty and guess in separate fields. The guess is the rule's
+own conclusion and is labelled an interpretation; rules without one have none. `potential_change`
+is words only, set only for a conclusion of kind `lever`, and never a configuration value; the
+success measure is the same measure taken again over a period of similar length (or with
+`--changed-on`), and a difference is not proof of an effect. The verdict tells `no_data`,
+`findings`, `none` and `not_measurable` apart. Texts taken from the machine (project names, file
+paths) are cleaned to one line of at most 400 characters and flagged as data in the report; no
+prompt, command, output, configuration or skill text is included.
+
 More rules are planned; see the project plan before relying on a rule that is not listed here.
 
 ## How the numbers are derived

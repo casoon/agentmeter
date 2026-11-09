@@ -244,6 +244,7 @@ fn detail(id: &str, views: &[View], period: &str, style: Style) -> String {
                 compaction_causes: None,
                 before_after: None,
                 retention: None,
+                ai_report: None,
             };
             render::text(&report, style)
         })

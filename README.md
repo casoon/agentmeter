@@ -119,6 +119,7 @@ agentmeter --retention         # also read cleanupPeriodDays and compare it with
 agentmeter --tool-calls        # also read tool calls: repeated reads/failures, large outputs (see below)
 agentmeter --instructions .  # the instruction files that apply to a directory (see below)
 agentmeter --skills            # skills called and not observed, with their share of the skill list (see below)
+agentmeter --ai-report         # a compact diagnosis as JSON for an AI to evaluate (see below)
 agentmeter --tool codex        # claude, codex or all (default)
 agentmeter --since 7d          # 7d, 30d or a date such as 2026-10-01
 agentmeter --project <name>    # one project
@@ -304,6 +305,28 @@ With `--probe`, Claude Code's own `Skills` figure is shown next to the scan; the
 different sets. Codex logs no skill calls, so there it is "not measurable". Rules followed:
 Claude Code skills documentation, 2026-11, checked with Claude Code 2.1.316
 ([Findings](docs/reference/findings.md)).
+
+## For an AI to evaluate: `--ai-report`
+
+`agentmeter --ai-report --since 7d` prints one line of JSON meant to be handed to an AI that
+helps interpret the results. It computes nothing new: it picks the findings of `--findings`
+(always on) and, if you also give `--tool-calls`, `--skills` or `--instructions <dir>`, those
+reports' findings, orders them the same way every time (level, certainty, whether the rule names
+something you control, source, rule) and keeps the first three (`--ai-report-max <n>`, 1 to 20).
+The rest is counted and named, and the full details stay in `--json`.
+
+Per finding it separates what was measured (message, measure with denominator and sample,
+certainty, evidence references), what is uncertain (counter-examples, limits), what is only a
+guess (the rule's interpretation, labelled as such), what to check first, a possible change where
+the rule names a lever, and how an improvement would show (the same measure, measured again).
+Before the findings come the scope, the data coverage, the limitations (gaps, unreadable lines,
+uncalibrated thresholds), and the rules that were not measurable or measured and found nothing,
+so "no data", "nothing found" and "not measurable" stay apart. It takes over no prompt, command,
+output, configuration or skill text; home directories in paths become `~`, strings from the
+machine are one line of at most 400 characters, and the report tells the reader to treat them as
+data, never as instructions. It calls no model and changes nothing; the size is in
+`ai_report.size.bytes` (bytes, not model tokens). Layout:
+[JSON output](docs/reference/json.md).
 
 ## Privacy
 
