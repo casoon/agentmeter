@@ -36,6 +36,7 @@ list under it names every field of that object. The tests compare these lists wi
 - `probe` — only with `--probe` and only for `claude`: what Claude Code's `/context` reported.
 - `transitions` — only with `--transitions`: starts, resumes and forks, compactions and pauses with the context around them.
 - `compare` — only with `--compare`: two periods side by side with change and denominators.
+- `before_after` — only with `--changed-on`: the period before a change date next to the period since it.
 - `tool_calls` — only with `--tool-calls`: repeated reads, repeated failures and large outputs, from tool calls and results.
 - `instructions` — only with `--instructions <dir>`: the instruction files that apply to that directory for this agent.
 
@@ -312,6 +313,30 @@ proof of a cause.
 
 - `kind` — `empty-window`, `window-not-reliable`, `model-mix` or `entrypoint-mix` (a model's or front end's share moved by 10 percentage points or more).
 - `text` — the limitation in words.
+
+### `sources[].before_after`
+
+The period from the date the user gave up to now (`later`) against an equally long period ending
+at that date (`earlier`), computed by the same function as `compare`. The date is the user's;
+nothing is detected. A difference is shown, never attributed to the change.
+
+- `change_point` — the given day, 00:00 UTC.
+- `label` — the user's name for the change (`--change-label`), otherwise `null`.
+- `period_days` — calendar days each period covers; `0` when the date is not in the past.
+- `notice` — in words: the difference is no effect of the change.
+- `comparison` — the comparison of the two periods.
+
+### `sources[].before_after.comparison`
+
+Same content as `sources[].compare`, including its objects `earlier`, `later`, `metrics[]` and
+`limitations[]`.
+
+- `verdict` — `compared`, `not_reliable` or `no_data`, as in `compare`.
+- `method` — how the figures are made, in words.
+- `earlier` — the period before the change date.
+- `later` — the period from the change date to now.
+- `metrics` — the figures, in a fixed order.
+- `limitations` — what limits the comparison, among them model and front-end shifts and periods that are too short.
 
 ### `sources[].tool_calls`
 

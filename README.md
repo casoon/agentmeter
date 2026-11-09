@@ -109,6 +109,7 @@ agentmeter --projects          # projects by input
 agentmeter --findings          # rules with conclusion, measure, evidence and next step
 agentmeter --probe             # also ask Claude Code what a session start holds (see below)
 agentmeter --compare 7d         # the last 7 days next to the 7 days before (see below)
+agentmeter --changed-on 2026-10-01  # the period before a change date next to the one since (see below)
 agentmeter --transitions        # starts, resumes, compactions, pauses as a timeline (see below)
 agentmeter --tool-calls        # also read tool calls: repeated reads/failures, large outputs (see below)
 agentmeter --instructions .  # the instruction files that apply to a directory (see below)
@@ -162,6 +163,15 @@ with fewer than 3 active days or 100 requests is shown without a change, and a s
 or front ends between the windows is listed as a limitation. A figure the logs cannot give stays
 unknown. A change is shown, not explained, and less or more input is not better or worse work.
 `--project` and `--tool` apply; `--since` does not combine with it.
+
+## Before and after a change: `--changed-on <date>`
+
+Shows the figures of `--compare` for the period before a date you give and an equally long period
+from that date to now. Name the change with `--change-label "<text>"` if you like; Agent Meter does
+not know what changed on that day and never guesses it. A difference between the periods is not an
+effect of the change: other tasks, a different model or front end and short periods change the
+numbers too, and these are listed as limitations. Less or more input is not better or worse work.
+Nothing is stored. `--project` and `--tool` apply; it does not combine with `--since`.
 
 ## Tool calls: `--tool-calls`
 

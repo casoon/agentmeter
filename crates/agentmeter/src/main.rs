@@ -74,6 +74,8 @@ pub struct Analysis {
     pub transitions: Option<agentmeter_core::transitions::TransitionReport>,
     /// What `--compare` found.
     pub compare: Option<agentmeter_core::compare::Comparison>,
+    /// What `--changed-on` found.
+    pub before_after: Option<agentmeter_core::before_after::BeforeAfter>,
 }
 
 pub fn read_sources(tool: Tool) -> Vec<Source> {
@@ -143,6 +145,14 @@ pub fn analyse(source: &Source, options: &Options, now_ms: i64, probe: Option<Pr
         compare: options.compare.map(|days| {
             let (earlier, later) = agentmeter_core::compare::windows_before(now_ms, days);
             agentmeter_core::compare::compare(dataset, earlier, later)
+        }),
+        before_after: options.changed_on.map(|change_ms| {
+            agentmeter_core::before_after::before_after(
+                dataset,
+                change_ms,
+                options.change_label.as_deref(),
+                now_ms,
+            )
         }),
         transitions: options.transitions.then(|| {
             agentmeter_core::transitions::analyse(dataset, source.tools.as_ref(), since_ms)
@@ -344,6 +354,7 @@ fn run(options: &Options, interactive: bool) -> ExitCode {
             tool_calls: a.tool_calls.as_ref(),
             transitions: a.transitions.as_ref(),
             compare: a.compare.as_ref(),
+            before_after: a.before_after.as_ref(),
         })
         .collect();
     if options.json {

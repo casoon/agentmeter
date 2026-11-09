@@ -77,6 +77,7 @@ pub struct Report<'a> {
     pub tool_calls: Option<&'a ToolAnalysis>,
     pub transitions: Option<&'a agentmeter_core::transitions::TransitionReport>,
     pub compare: Option<&'a agentmeter_core::compare::Comparison>,
+    pub before_after: Option<&'a agentmeter_core::before_after::BeforeAfter>,
 }
 
 /// Widest the text gets, also in a wider terminal or a pipe; bars are at most [`BAR`] cells.
@@ -202,6 +203,9 @@ pub fn text(report: &Report, style: Style) -> String {
     if let Some(c) = report.compare {
         out += &compare_text(c, style);
     }
+    if let Some(b) = report.before_after {
+        out += &before_after_text(b, style);
+    }
     if let Some(t) = report.transitions {
         out += &transitions_text(t, style);
     }
@@ -244,8 +248,31 @@ fn compare_value(name: &str, value: Option<f64>) -> String {
     }
 }
 
+fn before_after_text(b: &agentmeter_core::before_after::BeforeAfter, style: Style) -> String {
+    let mut out = heading(style, "BEFORE AND AFTER");
+    let change = match &b.label {
+        Some(label) => format!("{} ({label})", &b.change_point[..10]),
+        None => b.change_point[..10].to_owned(),
+    };
+    out += &wrap(
+        style,
+        &format!("{change} · {} days each side", count(b.period_days as u64)),
+        "  change     ",
+        "             ",
+        13,
+    );
+    out += &wrap(style, b.notice, "  note       ", "             ", 13);
+    out += &compare_body(&b.comparison, style);
+    out
+}
+
 fn compare_text(c: &agentmeter_core::compare::Comparison, style: Style) -> String {
-    let mut out = heading(style, "COMPARISON");
+    let out = heading(style, "COMPARISON");
+    out + &compare_body(c, style)
+}
+
+fn compare_body(c: &agentmeter_core::compare::Comparison, style: Style) -> String {
+    let mut out = String::new();
     out += &wrap(style, c.method, "  method     ", "             ", 13);
     for (name, w) in [("earlier", &c.earlier), ("later  ", &c.later)] {
         out += &wrap(
@@ -1511,6 +1538,9 @@ fn json_source(report: &Report) -> Value {
     }
     if let Some(v) = report.compare {
         put("compare", json!(v));
+    }
+    if let Some(v) = report.before_after {
+        put("before_after", json!(v));
     }
     if let Some(v) = report.findings {
         put("verdict", json!(v.verdict));

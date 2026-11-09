@@ -61,6 +61,10 @@ pub struct Options {
     pub transitions: bool,
     /// Compare the last N days with the N days before them.
     pub compare: Option<i64>,
+    /// Compare the period before a user-given change date with the one after it (00:00 UTC, ms).
+    pub changed_on: Option<i64>,
+    /// The user's name for that change.
+    pub change_label: Option<String>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -115,6 +119,21 @@ where
                 },
                 None => return Invocation::Error("--compare needs a period like 7d".to_owned()),
             },
+            "--changed-on" => match args.next() {
+                Some(value) => match parse_date_ms(&value) {
+                    Some(ms) => options.changed_on = Some(ms),
+                    None => {
+                        return Invocation::Error(format!(
+                            "`{value}` is not a date; use a day like 2026-10-01"
+                        ));
+                    }
+                },
+                None => return Invocation::Error("--changed-on needs a date".to_owned()),
+            },
+            "--change-label" => match args.next() {
+                Some(value) => options.change_label = Some(value),
+                None => return Invocation::Error("--change-label needs a text".to_owned()),
+            },
             "--probe" => {
                 options.probe = true;
                 options.findings = true;
@@ -168,13 +187,22 @@ where
             "--compare sets both periods itself; it does not combine with --since".to_owned(),
         );
     }
+    if options.changed_on.is_some() && options.since.is_some() {
+        return Invocation::Error(
+            "--changed-on sets both periods itself; it does not combine with --since".to_owned(),
+        );
+    }
+    if options.change_label.is_some() && options.changed_on.is_none() {
+        return Invocation::Error("--change-label needs --changed-on <date>".to_owned());
+    }
     if !(options.sessions
         || options.projects
         || options.findings
         || options.instructions.is_some()
         || options.tool_calls
         || options.transitions
-        || options.compare.is_some())
+        || options.compare.is_some()
+        || options.changed_on.is_some())
     {
         options.summary = true;
     }
@@ -226,6 +254,13 @@ Options:
                          denominators. Windows with too few days or requests get no change;
                          model and front-end shifts are named. Shows changes, never causes.
                          Does not combine with --since; --project and --tool apply.
+      --changed-on <date>
+                         The period before a change next to the period since it, of equal
+                         length: the same figures as --compare. The date (like 2026-10-01) is
+                         yours, never guessed. A difference is not an effect of the change;
+                         model and front-end shifts and short periods are named as limits.
+                         Does not combine with --since.
+      --change-label <t> Your name for the change, shown with --changed-on.
       --json             Print JSON instead of text (schema: docs/reference/json.md)
       --check <name>     data-quality: exit 1 if a source has unreadable data or none to
                          analyse, 0 otherwise, 2 for a bad call. Findings never fail it.
@@ -351,6 +386,25 @@ mod tests {
             panic!("expected a run");
         };
         assert_eq!(options.compare, None);
+    }
+
+    #[test]
+    fn changed_on_needs_a_date_and_stands_alone() {
+        let Invocation::Run(options) =
+            run(&["--changed-on", "2026-10-01", "--change-label", "new rules"])
+        else {
+            panic!("expected a run");
+        };
+        assert!(options.changed_on.is_some() && !options.summary);
+        assert_eq!(options.change_label.as_deref(), Some("new rules"));
+        for bad in [
+            &["--changed-on"][..],
+            &["--changed-on", "7d"],
+            &["--change-label", "x"],
+            &["--changed-on", "2026-10-01", "--since", "7d"],
+        ] {
+            assert!(matches!(run(bad), Invocation::Error(_)), "{bad:?}");
+        }
     }
 
     #[test]

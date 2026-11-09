@@ -284,6 +284,10 @@ fn documented_json_fields_equal_the_real_ones() {
             "--transitions",
             "--compare",
             "7d",
+            "--changed-on",
+            "2026-10-01",
+            "--change-label",
+            "new rules",
             "--instructions",
             fixtures().join("instr/claude/repo").to_str().unwrap(),
         ],
@@ -292,7 +296,7 @@ fn documented_json_fields_equal_the_real_ones() {
     assert_eq!(v["schema_version"], 1);
     let documented = documented_fields();
     assert!(
-        documented.len() == 33,
+        documented.len() == 35,
         "the doc lists the objects: {documented:?}"
     );
     for (path, fields) in &documented {
@@ -891,6 +895,69 @@ fn compare_is_opt_in_and_text_fits() {
             .unwrap()
             .iter()
             .all(|m| m["change"].is_null())
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn changed_on_compares_equal_periods_and_never_names_a_cause() {
+    use agentmeter_core::time::{DAY_MS, format_iso};
+    let dir = compare_config("changed-on");
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64;
+    // Seven days ago, midnight UTC: the days with logs before it are 8 to 11 days ago.
+    let day = format_iso(now - 7 * DAY_MS)[..10].to_owned();
+    let v = json_of(
+        &dir,
+        &[
+            "--changed-on",
+            &day,
+            "--change-label",
+            "new rules",
+            "--json",
+        ],
+    );
+    let b = &v["sources"][0]["before_after"];
+    assert_eq!(b["label"], "new rules");
+    assert!(b["change_point"].as_str().unwrap().starts_with(&day));
+    assert!(b["notice"].as_str().unwrap().contains("not an effect"));
+    assert_eq!(
+        b["comparison"]["earlier"]["to"],
+        b["comparison"]["later"]["from"]
+    );
+    assert!(b["comparison"]["metrics"].as_array().unwrap().len() == 8);
+    // The model changed completely: a limitation, whatever the numbers did.
+    let kinds: Vec<&str> = b["comparison"]["limitations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|l| l["kind"].as_str().unwrap())
+        .collect();
+    assert!(kinds.contains(&"model-mix"), "{kinds:?}");
+    // Opt-in: the default output has no such key.
+    let plain = json_of(&dir, &["--json"]);
+    assert!(plain["sources"][0].get("before_after").is_none());
+    // A date with no logs before it: unknown values, no change.
+    let v = json_of(&dir, &["--changed-on", "2020-01-01", "--json"]);
+    let c = &v["sources"][0]["before_after"]["comparison"];
+    assert_eq!(c["verdict"], "no_data");
+    assert!(
+        c["metrics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|m| m["change"].is_null())
+    );
+    let text = String::from_utf8(run_dir(&dir, &["--changed-on", &day]).stdout).unwrap();
+    assert!(text.contains("BEFORE AND AFTER") && text.contains("not an effect"));
+    for line in text.lines() {
+        assert!(line.chars().count() <= 88, "{line}");
+    }
+    assert_eq!(
+        run_dir(&dir, &["--changed-on", "7d"]).status.code(),
+        Some(2)
     );
     let _ = std::fs::remove_dir_all(dir);
 }

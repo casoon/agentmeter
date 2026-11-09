@@ -75,6 +75,17 @@ gets no change. A shift of 10 percentage points or more in the share of a model 
 (`entrypoint`) between the windows is named as a limitation. A change is a correlation with
 whatever else changed in that time; it says nothing about cause or about the quality of the work.
 
+## Before and after a change
+
+`--changed-on <date>` is the same view as `--compare` with the windows set by the user: the period
+from the given day to now, and an equally long period before that day. The day is never guessed
+and the report does not know what changed (`--change-label` only echoes the user's name). All
+figures, the reliability threshold and the model and front-end limitations are those of
+`--compare`. A difference between the periods is not attributed to the change: other tasks,
+models or front ends, and short periods, move the numbers too, and less or more input is not
+better or worse work. Today's `--probe` values are not part of it and are never read as an earlier
+configuration; nothing is stored, so no earlier configuration can be recovered from this view.
+
 ## Tool-call rules
 
 Only with `--tool-calls`. Each observation carries the period, the sample, counter-examples that

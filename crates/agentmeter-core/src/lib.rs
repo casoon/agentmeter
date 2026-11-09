@@ -3,6 +3,7 @@
 //! Adapters turn an agent's session logs into a [`Dataset`]; everything in this crate works on
 //! that and never touches a file.
 
+pub mod before_after;
 pub mod check;
 pub mod compare;
 pub mod findings;
