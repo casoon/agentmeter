@@ -10,6 +10,7 @@
 pub mod instructions;
 pub mod probe;
 mod raw;
+pub mod skills;
 
 use agentmeter_core::model::{AgentLink, Compaction, Dataset, ReadStats, Request, SessionStart};
 use agentmeter_core::time::parse_iso_ms;
@@ -642,6 +643,13 @@ fn tool_event(
             text("notebook_path").map(str::to_owned),
             None,
             None,
+        ),
+        // The skill name is kept as the target; the arguments only go into the fingerprint.
+        "Skill" => (
+            ToolKind::Other,
+            text("skill").map(str::to_owned),
+            None,
+            input.map(|i| serde_json::Value::Object(i.clone()).to_string()),
         ),
         "Bash" => (
             ToolKind::Command,

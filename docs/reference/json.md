@@ -39,6 +39,7 @@ list under it names every field of that object. The tests compare these lists wi
 - `subagents` — only with `--subagents`: direct and delegated usage per session, overlapping runs and shared files.
 - `tool_calls` — only with `--tool-calls`: repeated reads, repeated failures and large outputs, from tool calls and results.
 - `instructions` — only with `--instructions <dir>`: the instruction files that apply to that directory for this agent.
+- `skills` — only with `--skills`: installed skills called and not observed in the period, with the size of their entries in the session-start skill list.
 
 ### `sources[].data_quality`
 
@@ -498,6 +499,62 @@ Today's files, not the history. Sizes are bytes; tokens are estimated as bytes �
 - `measure` — what was measured.
 - `certainty` — `high`, `medium` or `low`.
 - `check` — one concrete step to check it.
+
+### `sources[].skills`
+
+Opt-in. Message content is opened only for the skill name of `Skill` tool calls (arguments are
+not kept); the installed skills are read from the headers of their `SKILL.md` files for the name
+and the length of the description, never the content. A skill without a call in the period is
+`not observed`, not `never used`: a skill started by hand with `/name` is not in the log in a form
+this reads. Sizes are bytes of the listing entry (name plus `description` and `when_to_use`, cut
+at 1,536 characters); tokens are estimated as bytes ÷ 4, never counted, and the two are not
+equated. Codex logs no skill calls: its `status` is `not_measurable` and nothing is scanned.
+
+- `method` — how calls and sizes were read.
+- `rules_version` — the skill-loading rules the scan follows and the documentation they come from.
+- `status` — `observed` (listed skills without a call), `checked_none` or `not_measurable`.
+- `reason` — why it is not measurable; otherwise `null`.
+- `message` — what was measured; otherwise `null`.
+- `calls` — skill calls in the selected period.
+- `installed` — skills the scan found.
+- `listed` — of these, skills whose entry is in the list sent at session start.
+- `user_only` — skills with `disable-model-invocation: true`: no list entry, never counted as unused.
+- `unreadable` — skills whose `SKILL.md` could not be read.
+- `used` — skills with at least one call in the period.
+- `unused_listed` — listed skills without a call in the period.
+- `listed_bytes` — bytes of all listed entries (estimate); `listed_est_tokens` is that as estimated tokens.
+- `listed_est_tokens` — `listed_bytes` as estimated tokens.
+- `unused_bytes` — bytes of the entries of `unused_listed` (estimate); `unused_est_tokens` is that as estimated tokens.
+- `unused_est_tokens` — `unused_bytes` as estimated tokens.
+- `largest_unused` — up to five entries of `unused_listed`, largest first, with the fields of `skills[]`.
+- `skills` — every scanned skill, most called first.
+- `called_not_scanned` — skills called in the period that are not among the scanned ones (built in, synced from claude.ai, nested or added directories, removed since).
+- `probe` — with `--probe` and a run in an empty directory: that run's `Skills` figure next to the scan; otherwise `null`.
+- `next_step` — what to check, for `observed`; otherwise `null`.
+- `notes` — limits of the scan: missing or unreadable directories, name clashes, plugins left out, what is not covered.
+
+### `sources[].skills.skills[]`
+
+- `name` — the name a call uses; plugin skills as `plugin:skill`.
+- `source` — `user`, `project` or `plugin`.
+- `path` — absolute path of the `SKILL.md`.
+- `state` — `listed`, `user_only` or `unreadable`.
+- `calls` — calls in the selected period.
+- `last_used` — time of the latest call in all logs read (not limited by `--since`), or `null`.
+- `list_bytes` — bytes of the listing entry (estimate); 0 unless listed.
+- `list_est_tokens` — `list_bytes` as estimated tokens.
+
+### `sources[].skills.called_not_scanned[]`
+
+- `name` — the skill name as called.
+- `calls` — calls in the selected period.
+- `last_used` — time of the latest call in all logs read, or `null`.
+
+### `sources[].skills.probe`
+
+- `place` — the probe run used (`empty directory`).
+- `probe_tokens` — tokens of the category `Skills` in `/context`, as Claude Code estimates them (`< 20` style cells are read as their limit).
+- `scanned_est_tokens` — estimated tokens of the listed user and plugin skills the scan found. The two cover different sets (the probe also counts built-in and claude.ai skills) and are shown side by side, not reconciled.
 
 ## `--check data-quality`
 

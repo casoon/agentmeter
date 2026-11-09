@@ -20,6 +20,12 @@ Location: `~/.claude/projects/<project>/<session>.jsonl`, sub-agents in `subagen
 - With `--tool-calls` only: `tool_use` blocks of assistant messages (id, name, file path or a
   hash of the command) and `tool_result` blocks of user messages (id, `is_error`, size of the
   text). Streaming copies and sub-agent replays repeat a call id and are merged.
+- With `--skills` the same blocks are read, and for the tool `Skill` the `skill` field of the
+  input is kept as the skill name (checked on one author's logs on 2026-11-09, current
+  Claude Code 2.1.316: `{"skill":"name"}`, sometimes with `args`, which is not kept). Plugin skills are `plugin:skill`
+  in Claude Code's own listing; no plugin skill call occurs in those logs, so the name a log
+  shows for one is not verified. A skill the user starts with `/name` appears as a command tag
+  in the prompt text, which is not read, so it is not counted.
 
 ## Codex CLI
 

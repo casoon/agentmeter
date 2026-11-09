@@ -285,6 +285,7 @@ fn documented_json_fields_equal_the_real_ones() {
             "--compare",
             "7d",
             "--subagents",
+            "--skills",
             "--instructions",
             fixtures().join("instr/claude/repo").to_str().unwrap(),
         ],
@@ -293,7 +294,7 @@ fn documented_json_fields_equal_the_real_ones() {
     assert_eq!(v["schema_version"], 1);
     let documented = documented_fields();
     assert!(
-        documented.len() == 40,
+        documented.len() == 44,
         "the doc lists the objects: {documented:?}"
     );
     for (path, fields) in &documented {
@@ -1302,4 +1303,74 @@ fn codex_subagents_follow_spawn_records_through_nested_delegation_and_keep_unkno
         Some(serde_json::json!("time_only"))
     );
     let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn skills_json_counts_calls_and_keeps_skill_content_out() {
+    let output = run("epoch-current", &["--skills", "--json"]);
+    assert!(output.status.success());
+    let raw = String::from_utf8(output.stdout).unwrap();
+    for secret in ["SECRET-SKILL-BODY", "SECRET-SKILL-ARGS"] {
+        assert!(!raw.contains(secret), "{secret} leaked");
+    }
+    let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    let s = &v["sources"][0]["skills"];
+    assert_eq!(s["status"], "observed");
+    assert_eq!(
+        (s["installed"].as_u64(), s["used"].as_u64()),
+        (Some(2), Some(1))
+    );
+    assert_eq!(s["calls"], 2);
+    assert_eq!(s["unused_listed"], 1);
+    assert_eq!(s["largest_unused"][0]["name"], "demo-unused");
+    assert_eq!(s["largest_unused"][0]["calls"], 0);
+    assert_eq!(s["called_not_scanned"][0]["name"], "built-in-demo");
+    // Bytes and tokens are two numbers, tokens an estimate of bytes / 4.
+    let bytes = s["unused_bytes"].as_u64().unwrap();
+    assert_eq!(s["unused_est_tokens"].as_u64().unwrap(), bytes.div_ceil(4));
+    assert!(s["next_step"].is_string() && !s["notes"].as_array().unwrap().is_empty());
+    // Neither the default mode nor --tool-calls/--transitions change by it.
+    let output = run("epoch-current", &["--summary", "--json"]);
+    let v: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(v["sources"][0].get("skills").is_none());
+    let output = run("epoch-current", &["--transitions", "--skills", "--json"]);
+    let v: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(v["sources"][0]["transitions"]["tool_data"], false);
+    assert!(v["sources"][0].get("tool_calls").is_none());
+}
+
+#[test]
+fn skills_text_names_unobserved_entries_and_fits() {
+    let output = run("epoch-current", &["--skills"]);
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(text.contains("SKILLS") && text.contains("demo-unused"));
+    assert!(text.contains("not observed in the period") && text.contains("/name"));
+    assert!(!text.contains("SECRET-SKILL"));
+    for line in text.lines() {
+        assert!(line.chars().count() <= 88, "{line}");
+    }
+}
+
+#[test]
+fn skills_are_not_measurable_for_codex() {
+    let output = run_both(
+        "does-not-exist",
+        "codex-basic",
+        &["--tool", "codex", "--skills", "--json"],
+    );
+    let v: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let s = &v["sources"][0]["skills"];
+    assert_eq!(s["status"], "not_measurable");
+    assert!(s["reason"].as_str().unwrap().contains("Codex"));
+    assert_eq!(s["skills"].as_array().unwrap().len(), 0);
+}
+
+#[test]
+fn skills_with_a_probe_show_the_skills_figure_next_to_the_scan() {
+    let output = run("epoch-current", &["--skills", "--probe", "--json"]);
+    let v: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let probe = &v["sources"][0]["skills"]["probe"];
+    assert_eq!(probe["place"], "empty directory");
+    assert_eq!(probe["probe_tokens"], 9_900);
+    assert!(probe["scanned_est_tokens"].as_u64().unwrap() > 0);
 }

@@ -63,6 +63,8 @@ pub struct Options {
     pub compare: Option<i64>,
     /// Consumption of main sessions and delegated agents, overlap, shared files.
     pub subagents: bool,
+    /// Called and uncalled skills with their share of the session-start skill list.
+    pub skills: bool,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -118,6 +120,7 @@ where
                 None => return Invocation::Error("--compare needs a period like 7d".to_owned()),
             },
             "--subagents" => options.subagents = true,
+            "--skills" => options.skills = true,
             "--probe" => {
                 options.probe = true;
                 options.findings = true;
@@ -178,7 +181,8 @@ where
         || options.tool_calls
         || options.transitions
         || options.compare.is_some()
-        || options.subagents)
+        || options.subagents
+        || options.skills)
     {
         options.summary = true;
     }
@@ -234,6 +238,11 @@ Options:
                          only where the log names the parent; runs that overlapped in time;
                          with --tool-calls files several agents read or wrote. Metadata only;
                          an overlap is a reason to look, not a conflict.
+      --skills           Installed skills called and not observed in the period, with the size
+                         of each entry in the session-start skill list. Opens message content
+                         for the skill name of Skill calls and reads the SKILL.md headers (name
+                         and description length) of user, plugin and project skills; no skill
+                         content is kept. A skill started by hand with /name is not counted.
       --json             Print JSON instead of text (schema: docs/reference/json.md)
       --check <name>     data-quality: exit 1 if a source has unreadable data or none to
                          analyse, 0 otherwise, 2 for a bad call. Findings never fail it.
@@ -367,6 +376,18 @@ mod tests {
             panic!("expected a run");
         };
         assert!(options.subagents && !options.summary && !options.tool_calls);
+    }
+
+    #[test]
+    fn skills_is_a_flag_of_its_own() {
+        let Invocation::Run(options) = run(&["--skills"]) else {
+            panic!("expected a run");
+        };
+        assert!(options.skills && !options.summary && !options.tool_calls);
+        let Invocation::Run(options) = run(&[]) else {
+            panic!("expected a run");
+        };
+        assert!(!options.skills);
     }
 
     #[test]

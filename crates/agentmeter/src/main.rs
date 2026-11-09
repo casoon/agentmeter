@@ -51,7 +51,7 @@ pub struct Source {
     pub label: &'static str,
     places: Vec<PathBuf>,
     pub dataset: Dataset,
-    /// Tool calls; only read with `--tool-calls`.
+    /// Tool calls; only read with `--tool-calls` or `--skills`.
     pub tools: Option<ToolData>,
 }
 
@@ -76,6 +76,8 @@ pub struct Analysis {
     pub compare: Option<agentmeter_core::compare::Comparison>,
     /// What `--subagents` found.
     pub subagents: Option<agentmeter_core::subagents::SubagentReport>,
+    /// What `--skills` found.
+    pub skills: Option<agentmeter_core::skills::SkillAnalysis>,
 }
 
 pub fn read_sources(tool: Tool) -> Vec<Source> {
@@ -147,11 +149,16 @@ pub fn analyse(source: &Source, options: &Options, now_ms: i64, probe: Option<Pr
             agentmeter_core::compare::compare(dataset, earlier, later)
         }),
         transitions: options.transitions.then(|| {
-            agentmeter_core::transitions::analyse(dataset, source.tools.as_ref(), since_ms)
+            // Tool calls read only for `--skills` do not feed the timeline.
+            let tools = source.tools.as_ref().filter(|_| options.tool_calls);
+            agentmeter_core::transitions::analyse(dataset, tools, since_ms)
         }),
-        subagents: options
-            .subagents
-            .then(|| agentmeter_core::subagents::analyse(dataset, source.tools.as_ref(), since_ms)),
+        subagents: options.subagents.then(|| {
+            // Tool calls read only for `--skills` do not feed the overlap check.
+            let tools = source.tools.as_ref().filter(|_| options.tool_calls);
+            agentmeter_core::subagents::analyse(dataset, tools, since_ms)
+        }),
+        skills: None,
         tool_calls: source
             .tools
             .as_ref()
@@ -264,12 +271,13 @@ fn run(options: &Options, interactive: bool) -> ExitCode {
         }
         other => other,
     };
-    let mut sources = read_sources_with(options.tool, options.tool_calls);
+    let with_tools = options.tool_calls || options.skills;
+    let mut sources = read_sources_with(options.tool, with_tools);
     // A file scan needs no logs: the sources are the agents asked for.
     if instructions_dir.is_some() && options.tool == Tool::All {
-        sources = read_sources_with(Tool::Claude, options.tool_calls)
+        sources = read_sources_with(Tool::Claude, with_tools)
             .into_iter()
-            .chain(read_sources_with(Tool::Codex, options.tool_calls))
+            .chain(read_sources_with(Tool::Codex, with_tools))
             .collect();
     }
     if instructions_dir.is_none()
@@ -313,6 +321,9 @@ fn run(options: &Options, interactive: bool) -> ExitCode {
             let probe = (options.probe && s.tool == "claude")
                 .then(|| run_probe(s, since_ms, io::stderr().is_terminal(), instructions_dir));
             let mut analysis = analyse(s, options, now_ms, probe);
+            if options.skills {
+                analysis.skills = Some(analyse_skills(s, since_ms, analysis.probe.as_ref()));
+            }
             if let Some(dir) = instructions_dir {
                 analysis.instructions =
                     Some(scan_instructions(s.tool, dir, analysis.probe.as_ref()));
@@ -350,6 +361,7 @@ fn run(options: &Options, interactive: bool) -> ExitCode {
             transitions: a.transitions.as_ref(),
             compare: a.compare.as_ref(),
             subagents: a.subagents.as_ref(),
+            skills: a.skills.as_ref(),
         })
         .collect();
     if options.json {
@@ -362,6 +374,51 @@ fn run(options: &Options, interactive: bool) -> ExitCode {
         print!("{}", blocks.join("\n"));
     }
     ExitCode::SUCCESS
+}
+
+/// Why a source cannot say which skills were called.
+const CODEX_SKILLS_REASON: &str = "Codex logs its tool calls as scripts without a skill name, so skill use is not \
+     measurable; its skill directories are not scanned";
+
+/// Skill calls against the installed skills of one source. Claude only: Codex logs no skill
+/// calls, so its rule is not measurable.
+fn analyse_skills(
+    source: &Source,
+    since_ms: Option<i64>,
+    probe: Option<&Probe>,
+) -> agentmeter_core::skills::SkillAnalysis {
+    use agentmeter_core::skills::{SkillScan, analyse};
+    if source.tool != "claude" {
+        let scan = SkillScan {
+            rules_version: "not applicable to Codex",
+            ..SkillScan::default()
+        };
+        return analyse(&scan, None, since_ms, None, Some(CODEX_SKILLS_REASON));
+    }
+    let scan = agentmeter_claude::skills::scan(
+        &agentmeter_claude::config_dirs(),
+        &session_dirs(&source.dataset, since_ms),
+    );
+    analyse(&scan, source.tools.as_ref(), since_ms, probe, None)
+}
+
+/// Working directories of the sessions that have requests in the period, once each.
+fn session_dirs(dataset: &Dataset, since_ms: Option<i64>) -> Vec<PathBuf> {
+    let sessions: std::collections::HashSet<&str> = dataset
+        .requests
+        .iter()
+        .filter(|r| since_ms.is_none_or(|s| r.time_ms >= s))
+        .map(|r| r.session.as_str())
+        .collect();
+    let mut dirs: Vec<PathBuf> = dataset
+        .session_starts
+        .iter()
+        .filter(|s| sessions.contains(s.session.as_str()))
+        .filter_map(|s| s.cwd.as_deref().map(PathBuf::from))
+        .collect();
+    dirs.sort();
+    dirs.dedup();
+    dirs
 }
 
 /// The instruction files of one agent for `dir`; a probe that ran in `dir` confirms the files

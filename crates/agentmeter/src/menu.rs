@@ -240,6 +240,7 @@ fn detail(id: &str, views: &[View], period: &str, style: Style) -> String {
                 transitions: None,
                 compare: None,
                 subagents: None,
+                skills: None,
             };
             render::text(&report, style)
         })
