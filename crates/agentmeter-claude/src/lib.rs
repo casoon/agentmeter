@@ -13,7 +13,8 @@ mod raw;
 
 use agentmeter_core::model::{Compaction, Dataset, ReadStats, Request, SessionStart};
 use agentmeter_core::time::parse_iso_ms;
-use raw::{RawCompact, RawLine, RawMessage};
+use agentmeter_core::toolcalls::{ToolData, ToolEvent, ToolKind, ToolStats, ToolStatus};
+use raw::{RawBlock, RawCompact, RawLine, RawMessage, RawToolMessage, ToolContent};
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
 use std::fs::{self, File};
@@ -74,7 +75,16 @@ pub fn config_dirs() -> Vec<PathBuf> {
 /// Reads the `projects/` directory of every configuration directory. Directories that do not
 /// exist are skipped; the caller can tell from `stats.files`.
 pub fn read(config_dirs: &[PathBuf]) -> Dataset {
-    let mut reader = Reader::default();
+    read_with_tools(config_dirs, false).0
+}
+
+/// Like [`read`]; with `tools` also the tool calls (`--tool-calls`), for which message content
+/// is opened. Without it content stays unread, as in the default mode.
+pub fn read_with_tools(config_dirs: &[PathBuf], tools: bool) -> (Dataset, ToolData) {
+    let mut reader = Reader {
+        collect_tools: tools,
+        ..Reader::default()
+    };
     for dir in config_dirs {
         let projects = dir.join("projects");
         let mut files = Vec::new();
@@ -83,7 +93,8 @@ pub fn read(config_dirs: &[PathBuf]) -> Dataset {
             reader.read_file(&projects, &file);
         }
     }
-    reader.finish()
+    let tool_data = reader.tool_data();
+    (reader.finish(), tool_data)
 }
 
 fn collect_files(dir: &Path, out: &mut Vec<PathBuf>) {
@@ -126,6 +137,12 @@ struct Reader {
     files: Vec<String>,
     session_starts: Vec<SessionStart>,
     source: usize,
+    /// `--tool-calls`: open message content for tool calls and results.
+    collect_tools: bool,
+    calls: HashMap<String, ToolEvent>,
+    results: HashMap<String, (ToolStatus, Option<u64>)>,
+    tool_seq: u64,
+    tool_duplicates: u64,
 }
 
 /// What one file showed about how it begins.
@@ -217,8 +234,12 @@ impl Reader {
 
             match line.kind.as_deref() {
                 Some("assistant") => {
+                    if self.collect_tools {
+                        self.tool_uses(&line, &session, &project, source, sub);
+                    }
                     self.assistant(&line, session, project, source, sub, &mut facts);
                 }
+                Some("user") if self.collect_tools => self.tool_results(&line),
                 Some("system") => self.system(&line, session, project, source),
                 Some(kind) if KNOWN_TYPES.contains(&kind) => {}
                 Some(kind) => *self.stats.unknown_types.entry(kind.to_owned()).or_default() += 1,
@@ -347,6 +368,121 @@ impl Reader {
         }
     }
 
+    /// `tool_use` blocks of an assistant line. Streaming copies and sub-agent replays repeat a
+    /// call id: the main conversation's copy wins, else the first.
+    fn tool_uses(
+        &mut self,
+        line: &RawLine,
+        session: &str,
+        project: &str,
+        source: usize,
+        sub: bool,
+    ) {
+        let (Some(raw), Some(time_ms)) = (
+            line.message,
+            line.timestamp.as_deref().and_then(parse_iso_ms),
+        ) else {
+            return;
+        };
+        let Ok(RawToolMessage {
+            content: ToolContent::Blocks(blocks),
+        }) = serde_json::from_str::<RawToolMessage>(raw.get())
+        else {
+            return;
+        };
+        for block in blocks {
+            if block.kind.as_deref() != Some("tool_use") {
+                continue;
+            }
+            let (Some(id), Some(name)) = (block.id.clone(), block.name.clone()) else {
+                continue;
+            };
+            self.tool_seq += 1;
+            let event = tool_event(
+                &block,
+                id.clone(),
+                name,
+                session,
+                project,
+                source,
+                sub,
+                self.tool_seq,
+                time_ms,
+            );
+            match self.calls.get(&id) {
+                Some(known) => {
+                    self.tool_duplicates += 1;
+                    if known.sub && !event.sub {
+                        self.calls.insert(id, event);
+                    }
+                }
+                None => {
+                    self.calls.insert(id, event);
+                }
+            }
+        }
+    }
+
+    /// `tool_result` blocks of a user line: status and size only.
+    fn tool_results(&mut self, line: &RawLine) {
+        let Some(raw) = line.message else {
+            return;
+        };
+        let Ok(RawToolMessage {
+            content: ToolContent::Blocks(blocks),
+        }) = serde_json::from_str::<RawToolMessage>(raw.get())
+        else {
+            return;
+        };
+        for block in blocks {
+            if block.kind.as_deref() != Some("tool_result") {
+                continue;
+            }
+            let Some(id) = block.tool_use_id.clone() else {
+                continue;
+            };
+            let status = match block.is_error {
+                Some(true) => ToolStatus::Error,
+                Some(false) => ToolStatus::Ok,
+                None => ToolStatus::Unknown,
+            };
+            let bytes = block.content.as_ref().map(raw::ResultContent::text_bytes);
+            self.results.entry(id).or_insert((status, bytes));
+        }
+    }
+
+    /// Joins calls and results; a result whose call is not in the logs is counted, not used.
+    fn tool_data(&self) -> ToolData {
+        let mut stats = ToolStats {
+            duplicates_merged: self.tool_duplicates,
+            ..ToolStats::default()
+        };
+        let mut events: Vec<ToolEvent> = self.calls.values().cloned().collect();
+        for e in &mut events {
+            if let Some((status, bytes)) = self.results.get(&e.call_id) {
+                e.status = *status;
+                e.output_bytes = *bytes;
+                e.has_result = true;
+            }
+            *stats.tools.entry(e.tool.clone()).or_default() += 1;
+        }
+        stats.results_without_call = self
+            .results
+            .keys()
+            .filter(|id| !self.calls.contains_key(*id))
+            .count() as u64;
+        stats.calls = events.len() as u64;
+        stats.calls_without_result = events.iter().filter(|e| !e.has_result).count() as u64;
+        events.sort_by_key(|e| (e.time_ms, e.source, e.seq));
+        ToolData {
+            events,
+            stats,
+            has_targets: true,
+            has_status: true,
+            has_sizes: true,
+        }
+    }
+
     fn system(&mut self, line: &RawLine, session: String, project: String, source: usize) {
         let Some(raw) = line.compact_metadata else {
             return;
@@ -436,4 +572,88 @@ fn project_name(directory: &str) -> String {
         .split_once("-GitHub-")
         .map_or_else(|| parent.trim_start_matches('-'), |(_, rest)| rest);
     if name.is_empty() { "unknown" } else { name }.to_owned()
+}
+
+/// One call as a [`ToolEvent`]. File tools keep their path (and line range for reads); every
+/// other call keeps only a hash of what makes it identical. The command text is not kept.
+#[allow(clippy::too_many_arguments)]
+fn tool_event(
+    block: &RawBlock,
+    call_id: String,
+    tool: String,
+    session: &str,
+    project: &str,
+    source: usize,
+    sub: bool,
+    seq: u64,
+    time_ms: i64,
+) -> ToolEvent {
+    use std::hash::{DefaultHasher, Hash, Hasher};
+    let input = block.input.as_ref();
+    let text = |key: &str| input.and_then(|i| i.get(key)).and_then(|v| v.as_str());
+    let number = |key: &str| {
+        input
+            .and_then(|i| i.get(key))
+            .and_then(serde_json::Value::as_u64)
+    };
+    let (kind, target, range, hashed) = match tool.as_str() {
+        "Read" => {
+            let range = match (number("offset"), number("limit")) {
+                (None, None) => None,
+                (offset, limit) => Some((offset.unwrap_or(0), limit.unwrap_or(u64::MAX))),
+            };
+            (
+                ToolKind::Read,
+                text("file_path").map(str::to_owned),
+                range,
+                None,
+            )
+        }
+        "Edit" | "Write" | "MultiEdit" => (
+            ToolKind::Write,
+            text("file_path").map(str::to_owned),
+            None,
+            None,
+        ),
+        "NotebookEdit" => (
+            ToolKind::Write,
+            text("notebook_path").map(str::to_owned),
+            None,
+            None,
+        ),
+        "Bash" => (
+            ToolKind::Command,
+            None,
+            None,
+            text("command").map(str::to_owned),
+        ),
+        _ => (
+            ToolKind::Other,
+            None,
+            None,
+            input.map(|i| serde_json::Value::Object(i.clone()).to_string()),
+        ),
+    };
+    let fingerprint = hashed.map(|h| {
+        let mut hasher = DefaultHasher::new();
+        h.trim().hash(&mut hasher);
+        hasher.finish()
+    });
+    ToolEvent {
+        source,
+        session: session.to_owned(),
+        project: project.to_owned(),
+        sub,
+        seq,
+        time_ms,
+        call_id,
+        tool,
+        kind,
+        target,
+        range,
+        fingerprint,
+        status: ToolStatus::Unknown,
+        output_bytes: None,
+        has_result: false,
+    }
 }

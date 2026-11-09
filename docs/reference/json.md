@@ -34,6 +34,7 @@ list under it names every field of that object. The tests compare these lists wi
 - `findings` — only with `--findings`: the diagnoses of the rules with status `observed`.
 - `rules` — only with `--findings`: the status of every rule, once each.
 - `probe` — only with `--probe` and only for `claude`: what Claude Code's `/context` reported.
+- `tool_calls` — only with `--tool-calls`: repeated reads, repeated failures and large outputs, from tool calls and results.
 - `instructions` — only with `--instructions <dir>`: the instruction files that apply to that directory for this agent.
 
 ### `sources[].data_quality`
@@ -201,6 +202,51 @@ The entries of `deferred`, `memory_files` and `mcp_servers` have the same fields
 
 - `label` — category, file path or server name.
 - `tokens` — tokens as `/context` estimates them.
+
+### `sources[].tool_calls`
+
+Opt-in: message content is opened for call ids, tool names, file paths of file tools, a hash of
+what makes other calls identical (a command is never kept) and the byte size of results. No
+command text and no output text is stored or printed. Limits are uncalibrated.
+
+- `method` — how calls and results were read.
+- `calls` — calls in the selected period.
+- `stats` — what reading saw: `calls`, `calls_without_result`, `results_without_call`, `duplicates_merged` (streaming copies and sub-agent replays of one call) and `tools` (calls per tool name).
+- `rules` — one entry per rule, once each.
+
+### `sources[].tool_calls.stats`
+
+- `calls` — calls in the period.
+- `calls_without_result` — calls whose result is not in the log; status and size stay unknown, never success or zero.
+- `results_without_call` — results whose call is not in the logs.
+- `duplicates_merged` — copies of one call id that were merged.
+- `tools` — calls per tool name.
+
+### `sources[].tool_calls.rules[]`
+
+- `id` — `repeat-read`, `repeat-failure` or `large-output`.
+- `version` — version of the rule.
+- `status` — `observed`, `checked_none` or `not_measurable`.
+- `reason` — why it is not measurable; otherwise `null`.
+- `message` — what was measured; otherwise `null`.
+- `count` — calls that match; `of` is the number of calls the rule looked at.
+- `of` — the denominator of `count`.
+- `from` — time of the first call in the period; `to` the last.
+- `to` — time of the last call in the period.
+- `threshold` — the limit, in words; `calibrated` is `false` for every rule.
+- `calibrated` — whether the limit is calibrated; currently always `false`.
+- `examples` — up to five entries `label` (a file path, or a tool name with a parameter fingerprint such as `Bash #a1b2c3d4`), `count` and `bytes` (output bytes of those calls, or `null`).
+- `counterexamples` — what looks like the pattern but is not counted, with numbers (re-read after an observed edit or a compaction, other line ranges).
+- `uncertainty` — what the rule cannot know, such as edits made by commands.
+- `evidence` — up to five entries `file` (the log file) and `event` (the call id).
+- `next_step` — one concrete step to check; otherwise `null`.
+
+Rules: `repeat-read` counts a read of the same file and line range as an earlier one in the same
+log file with no observed edit of that file and no compaction between; `repeat-failure` counts an
+identical failed call repeated with no observed edit in the session between; `large-output`
+counts single results of 100,000 bytes or more. Codex logs its tool arguments as scripts and
+no success or failure, so there only `large-output` is measurable. Bytes are not tokens; the
+tokens of a request are not attributed to one tool.
 
 ### `sources[].instructions`
 

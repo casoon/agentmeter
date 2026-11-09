@@ -55,6 +55,8 @@ pub struct Options {
     pub probe: bool,
     /// Scan the instruction files that apply to this directory; implies nothing else.
     pub instructions: Option<String>,
+    /// Also read tool calls and results (repeated reads and failures, large outputs).
+    pub tool_calls: bool,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -94,6 +96,7 @@ where
             "--projects" => options.projects = true,
             "--findings" => options.findings = true,
             "--json" => options.json = true,
+            "--tool-calls" => options.tool_calls = true,
             "--probe" => {
                 options.probe = true;
                 options.findings = true;
@@ -142,7 +145,11 @@ where
             "--probe asks Claude Code; it does not apply to codex".to_owned(),
         );
     }
-    if !(options.sessions || options.projects || options.findings || options.instructions.is_some())
+    if !(options.sessions
+        || options.projects
+        || options.findings
+        || options.instructions.is_some()
+        || options.tool_calls)
     {
         options.summary = true;
     }
@@ -180,6 +187,10 @@ Options:
                          The instruction files that apply to <dir> (CLAUDE.md, AGENTS.md, rules,
                          imports): where from, size, whether they load at session start. Reads
                          files only; with --probe, Claude Code confirms what it loads there.
+      --tool-calls       Also read tool calls and results: repeated reads of the same file
+                         area, identical failed calls and very large outputs. Opens message
+                         content for call ids, paths, a fingerprint of commands and the byte
+                         size of results; no command or output text is kept or printed.
       --json             Print JSON instead of text (schema: docs/reference/json.md)
       --check <name>     data-quality: exit 1 if a source has unreadable data or none to
                          analyse, 0 otherwise, 2 for a bad call. Findings never fail it.
@@ -261,6 +272,18 @@ mod tests {
         assert_eq!(options.instructions.as_deref(), Some("/x"));
         assert!(!options.summary);
         assert!(matches!(run(&["--instructions"]), Invocation::Error(_)));
+    }
+
+    #[test]
+    fn tool_calls_is_a_flag_of_its_own() {
+        let Invocation::Run(options) = run(&["--tool-calls"]) else {
+            panic!("expected a run");
+        };
+        assert!(options.tool_calls && !options.summary);
+        let Invocation::Run(options) = run(&[]) else {
+            panic!("expected a run");
+        };
+        assert!(!options.tool_calls);
     }
 
     #[test]

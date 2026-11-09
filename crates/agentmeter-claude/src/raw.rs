@@ -78,3 +78,67 @@ pub struct RawCompact {
     #[serde(rename = "postTokens", default)]
     pub post_tokens: Option<u64>,
 }
+
+/// Message content, opened only for `--tool-calls`.
+#[derive(Deserialize)]
+pub struct RawToolMessage {
+    #[serde(default)]
+    pub content: ToolContent,
+}
+
+/// A message's content is a string (plain text) or a list of blocks.
+#[derive(Deserialize, Default)]
+#[serde(untagged)]
+pub enum ToolContent {
+    Blocks(Vec<RawBlock>),
+    #[default]
+    Other,
+}
+
+#[derive(Deserialize)]
+pub struct RawBlock {
+    #[serde(rename = "type", default)]
+    pub kind: Option<String>,
+    #[serde(default)]
+    pub id: Option<String>,
+    #[serde(default)]
+    pub name: Option<String>,
+    /// Parameters of a call; held in memory only while the line is read.
+    #[serde(default)]
+    pub input: Option<serde_json::Map<String, serde_json::Value>>,
+    #[serde(default)]
+    pub tool_use_id: Option<String>,
+    #[serde(default)]
+    pub is_error: Option<bool>,
+    #[serde(default)]
+    pub content: Option<ResultContent>,
+}
+
+/// A result's content: text or a list of blocks.
+#[derive(Deserialize)]
+#[serde(untagged)]
+pub enum ResultContent {
+    Text(String),
+    Blocks(Vec<ResultBlock>),
+    Other(IgnoredAny),
+}
+
+#[derive(Deserialize)]
+pub struct ResultBlock {
+    #[serde(default)]
+    pub text: Option<String>,
+}
+
+impl ResultContent {
+    /// Bytes of the text; images and other blocks add nothing.
+    pub fn text_bytes(&self) -> u64 {
+        match self {
+            ResultContent::Other(_) => 0,
+            ResultContent::Text(t) => t.len() as u64,
+            ResultContent::Blocks(b) => b
+                .iter()
+                .map(|b| b.text.as_deref().map_or(0, str::len) as u64)
+                .sum(),
+        }
+    }
+}

@@ -5,6 +5,7 @@ use agentmeter_core::format::{count, tokens};
 use agentmeter_core::instructions::{InstructionScan, LoadState};
 use agentmeter_core::model::{DataQuality, PROBE_EMPTY_PLACE, Probe, ProbeItem, ReadStats};
 use agentmeter_core::report::{ProjectRow, SessionRow, Summary};
+use agentmeter_core::toolcalls::ToolAnalysis;
 use runemark::{ColorMode, Console, Tone};
 use serde_json::{Value, json};
 use std::path::PathBuf;
@@ -73,6 +74,7 @@ pub struct Report<'a> {
     pub findings: Option<&'a Evaluation>,
     pub probe: Option<&'a Probe>,
     pub instructions: Option<&'a InstructionScan>,
+    pub tool_calls: Option<&'a ToolAnalysis>,
 }
 
 /// Widest the text gets, also in a wider terminal or a pipe; bars are at most [`BAR`] cells.
@@ -195,6 +197,9 @@ pub fn text(report: &Report, style: Style) -> String {
     if let Some(findings) = report.findings {
         out += &findings_text(findings, report.probe, style);
     }
+    if let Some(tools) = report.tool_calls {
+        out += &tool_calls_text(tools, style);
+    }
     if let Some(scan) = report.instructions {
         out += &instructions_text(scan, style);
     }
@@ -203,6 +208,104 @@ pub fn text(report: &Report, style: Style) -> String {
     }
     if let Some(projects) = report.projects {
         out += &projects_text(projects, style);
+    }
+    out
+}
+
+fn tool_calls_text(a: &ToolAnalysis, style: Style) -> String {
+    let mut out = heading(style, "TOOL CALLS");
+    out += &wrap(style, a.method, "  method     ", "             ", 13);
+    out += &format!(
+        "  calls      {} in the period · {} without a result · {} merged duplicates\n",
+        style.bold(&count(a.calls)),
+        count(a.stats.calls_without_result),
+        count(a.stats.duplicates_merged)
+    );
+    for r in &a.rules {
+        let (mark, tone) = match r.status {
+            "observed" => ("◆", Tone::Warning),
+            "checked_none" => ("✓", Tone::Success),
+            _ => ("·", Tone::Muted),
+        };
+        out += &format!(
+            "\n  {} {} (v{}) · {}\n",
+            style.tone(tone, mark),
+            style.bold(r.id),
+            r.version,
+            match r.status {
+                "observed" => "observed",
+                "checked_none" => "checked, nothing to report",
+                _ => "not measurable",
+            }
+        );
+        let indent = "    ";
+        if let Some(reason) = &r.reason {
+            out += &wrap(style, reason, indent, indent, 4);
+            continue;
+        }
+        if let Some(m) = &r.message {
+            out += &wrap(style, m, indent, indent, 4);
+        }
+        if let (Some(from), Some(to)) = (&r.from, &r.to) {
+            out += &wrap(
+                style,
+                &format!("period  {from} to {to}"),
+                indent,
+                "            ",
+                4,
+            );
+        }
+        if let (Some(n), Some(of)) = (r.count, r.of) {
+            out += &wrap(
+                style,
+                &format!(
+                    "sample  {} of {} calls · limit: {} (uncalibrated)",
+                    count(n),
+                    count(of),
+                    r.threshold
+                ),
+                indent,
+                "            ",
+                4,
+            );
+        }
+        for e in &r.examples {
+            let bytes = e.bytes.map_or(String::new(), |b| match b {
+                0..1000 => format!(" · {b} B"),
+                _ => format!(" · {} KB", b / 1000),
+            });
+            out += &wrap(
+                style,
+                &format!("{} × {}{bytes}", count(e.count), e.label),
+                "    · ",
+                "      ",
+                6,
+            );
+        }
+        for c in &r.counterexamples {
+            out += &wrap(
+                style,
+                &format!("not counted  {c}"),
+                indent,
+                "                 ",
+                4,
+            );
+        }
+        if let Some(u) = &r.uncertainty {
+            out += &wrap(
+                style,
+                &format!("uncertain  {u}"),
+                indent,
+                "               ",
+                4,
+            );
+        }
+        for ev in &r.evidence {
+            out += &evidence_text(style, &ev.file, &ev.event);
+        }
+        if let Some(n) = &r.next_step {
+            out += &wrap(style, &format!("next  {n}"), indent, "          ", 4);
+        }
     }
     out
 }
@@ -1179,6 +1282,9 @@ fn json_source(report: &Report) -> Value {
     }
     if let Some(v) = report.instructions {
         put("instructions", json!(v));
+    }
+    if let Some(v) = report.tool_calls {
+        put("tool_calls", json!(v));
     }
     if let Some(v) = report.findings {
         put("verdict", json!(v.verdict));
