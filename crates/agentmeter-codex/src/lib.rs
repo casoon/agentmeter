@@ -13,6 +13,7 @@
 //! rollouts (`.jsonl.zst`) are streamed through ruzstd with a window and an output limit; damaged
 //! ones are counted, never fatal.
 
+pub mod instructions;
 mod raw;
 
 use agentmeter_core::model::{Compaction, Dataset, ReadStats, Request, SessionStart};

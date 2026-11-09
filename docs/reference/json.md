@@ -34,6 +34,7 @@ list under it names every field of that object. The tests compare these lists wi
 - `findings` — only with `--findings`: the diagnoses of the rules with status `observed`.
 - `rules` — only with `--findings`: the status of every rule, once each.
 - `probe` — only with `--probe` and only for `claude`: what Claude Code's `/context` reported.
+- `instructions` — only with `--instructions <dir>`: the instruction files that apply to that directory for this agent.
 
 ### `sources[].data_quality`
 
@@ -200,6 +201,38 @@ The entries of `deferred`, `memory_files` and `mcp_servers` have the same fields
 
 - `label` — category, file path or server name.
 - `tokens` — tokens as `/context` estimates them.
+
+### `sources[].instructions`
+
+Today's files, not the history. Sizes are bytes; tokens are estimated as bytes ÷ 4, never counted.
+
+- `tool` — `claude` or `codex`; each agent follows its own loading rules.
+- `rules_version` — the loading rules and the documentation they come from.
+- `method` — how sizes were measured.
+- `dir` — the directory that was scanned.
+- `files` — every instruction file found, including those that do not load.
+- `loaded_est_tokens` — estimated tokens of the files expected (or confirmed) at session start. Files that are on demand, not loaded, unreadable or missing are not in it.
+- `findings` — rule findings; empty when there are none.
+- `notes` — limits of the scan.
+
+### `sources[].instructions.files[]`
+
+- `path` — absolute path.
+- `scope` — `managed`, `user`, `ancestor` (a directory above), `project` (the directory itself), `rules`, `nested` (below the directory) or `import`.
+- `state` — `confirmed` (`--probe` listed it), `expected` (the loading rules say it loads at start; not observed), `on_demand`, `not_loaded` (exists, but excluded, shadowed or beyond a limit), `unreadable` or `missing` (an import that is not there).
+- `bytes` — size on disk; 0 when unreadable or missing.
+- `est_tokens` — `bytes` as estimated tokens.
+- `loaded_bytes` — bytes expected in the context at start; 0 unless `confirmed` or `expected`, less than `bytes` when a limit cuts the file.
+- `via` — the file that imports this one, or `null`.
+- `note` — why the state, or `null`.
+
+### `sources[].instructions.findings[]`
+
+- `rule` — `broken-import`, `duplicate-instructions`, `base-size` or `load-limit` (Codex).
+- `file` — the file (or directory) it is about.
+- `measure` — what was measured.
+- `certainty` — `high`, `medium` or `low`.
+- `check` — one concrete step to check it.
 
 ## `--check data-quality`
 

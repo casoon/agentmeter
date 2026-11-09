@@ -280,13 +280,15 @@ fn documented_json_fields_equal_the_real_ones() {
             "--projects",
             "--findings",
             "--probe",
+            "--instructions",
+            fixtures().join("instr/claude/repo").to_str().unwrap(),
         ],
     );
     let v: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(v["schema_version"], 1);
     let documented = documented_fields();
     assert!(
-        documented.len() == 18,
+        documented.len() == 21,
         "the doc lists the objects: {documented:?}"
     );
     for (path, fields) in &documented {
@@ -421,4 +423,109 @@ fn findings_text_shows_conclusions_bars_and_what_was_read() {
     assert!(text.contains("⇒ today's configuration is 33k of the median start 75k"));
     assert!(text.contains("████"));
     assert!(text.contains("loaded on demand, not sent at start"));
+}
+
+/// A directory with its own `CLAUDE.md`, an unreadable-looking import and a Codex file, under
+/// the temp dir (so the ancestors are not the repository's).
+fn instructions_dir(name: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("agentmeter-cli-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("sub")).unwrap();
+    std::fs::write(dir.join("CLAUDE.md"), "# x\n@gone.md\n").unwrap();
+    std::fs::write(dir.join("sub/CLAUDE.md"), "nested\n").unwrap();
+    std::fs::write(dir.join("AGENTS.md"), "codex\n").unwrap();
+    std::fs::canonicalize(dir).unwrap()
+}
+
+#[test]
+fn instructions_json_lists_files_with_state_and_findings_without_logs() {
+    let dir = instructions_dir("json");
+    let output = run(
+        "does-not-exist-either",
+        &[
+            "--instructions",
+            dir.to_str().unwrap(),
+            "--tool",
+            "claude",
+            "--json",
+        ],
+    );
+    assert!(output.status.success());
+    let v: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let scan = &v["sources"][0]["instructions"];
+    assert_eq!(scan["tool"], "claude");
+    let files = scan["files"].as_array().unwrap();
+    let state = |suffix: &str| {
+        files
+            .iter()
+            .find(|f| f["path"].as_str().unwrap().ends_with(suffix))
+            .map(|f| f["state"].as_str().unwrap().to_owned())
+    };
+    assert_eq!(state("/CLAUDE.md").as_deref(), Some("expected"));
+    assert_eq!(state("sub/CLAUDE.md").as_deref(), Some("on_demand"));
+    assert_eq!(state("gone.md").as_deref(), Some("missing"));
+    assert_eq!(state("AGENTS.md").as_deref(), Some("not_loaded"));
+    assert!(
+        scan["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|f| f["rule"] == "broken-import")
+    );
+    // Only the expected file counts: "# x\n@gone.md\n" is 14 bytes.
+    assert_eq!(scan["loaded_est_tokens"], 14u64.div_ceil(4));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn instructions_text_names_state_and_measure_and_fits_88_columns() {
+    let dir = instructions_dir("text");
+    let output = run(
+        "does-not-exist-either",
+        &["--instructions", dir.to_str().unwrap(), "--tool", "claude"],
+    );
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        text.contains("INSTRUCTIONS")
+            && text.contains("on demand")
+            && text.contains("broken-import")
+    );
+    assert!(text.contains("tokens estimated as bytes / 4"));
+    for line in text.lines() {
+        assert!(line.chars().count() <= 88, "{line}");
+    }
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn instructions_codex_follows_its_own_rules_and_a_bad_directory_exits_two() {
+    let dir = instructions_dir("codex");
+    let output = run_both(
+        "does-not-exist",
+        "does-not-exist",
+        &[
+            "--instructions",
+            dir.to_str().unwrap(),
+            "--tool",
+            "codex",
+            "--json",
+        ],
+    );
+    let v: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let scan = &v["sources"][0]["instructions"];
+    assert_eq!(scan["tool"], "codex");
+    let files = scan["files"].as_array().unwrap();
+    // Codex reads AGENTS.md only; CLAUDE.md files are not its business.
+    assert!(
+        files
+            .iter()
+            .all(|f| f["path"].as_str().unwrap().ends_with("AGENTS.md"))
+    );
+    let _ = std::fs::remove_dir_all(dir);
+    assert_eq!(
+        run("epoch-current", &["--instructions", "/no/such/dir"])
+            .status
+            .code(),
+        Some(2)
+    );
 }

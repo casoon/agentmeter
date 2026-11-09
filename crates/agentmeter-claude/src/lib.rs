@@ -7,6 +7,7 @@
 //! that are not known are counted in [`ReadStats`], never fatal. Only usage fields are read;
 //! message content is skipped without being parsed.
 
+pub mod instructions;
 pub mod probe;
 mod raw;
 

@@ -7,6 +7,7 @@ mod cli;
 mod menu;
 mod render;
 
+use agentmeter_core::instructions::{InstructionScan, LoadState};
 use agentmeter_core::model::{Dataset, PROBE_EMPTY_PLACE, Probe};
 use agentmeter_core::report::{ProjectRow, SessionRow, Summary, projects, sessions, summarize};
 use agentmeter_core::time::format_day;
@@ -62,6 +63,8 @@ pub struct Analysis {
     pub findings: Option<Evaluation>,
     /// What `--probe` asked Claude Code; only for the Claude source.
     pub probe: Option<Probe>,
+    /// What `--instructions` found for this source.
+    pub instructions: Option<InstructionScan>,
 }
 
 pub fn read_sources(tool: Tool) -> Vec<Source> {
@@ -121,8 +124,12 @@ pub fn analyse(source: &Source, options: &Options, now_ms: i64, probe: Option<Pr
             .findings
             .then(|| evaluate(dataset, since_ms, probe.as_ref())),
         probe,
+        instructions: None,
     }
 }
+
+/// Place name of the directory given to `--instructions` in a probe.
+pub const PROBE_INSTRUCTIONS_PLACE: &str = "instructions directory";
 
 /// Projects probed besides the empty directory: the busiest by requests in the period.
 const PROBE_PROJECTS: usize = 3;
@@ -133,6 +140,7 @@ pub fn probe_places(
     dataset: &Dataset,
     since_ms: Option<i64>,
     empty: &Path,
+    extra: Option<&Path>,
 ) -> Vec<(String, PathBuf)> {
     let in_window = |time_ms: i64| since_ms.is_none_or(|since| time_ms >= since);
     let mut requests: HashMap<&str, u64> = HashMap::new();
@@ -165,11 +173,19 @@ pub fn probe_places(
             places.push((project.to_owned(), dir));
         }
     }
+    if let Some(dir) = extra {
+        places.push((PROBE_INSTRUCTIONS_PLACE.to_owned(), dir.to_path_buf()));
+    }
     places
 }
 
 /// Runs the probe for the Claude source and says on stderr what it does, since it takes seconds.
-pub fn run_probe(source: &Source, since_ms: Option<i64>, tell: bool) -> Probe {
+pub fn run_probe(
+    source: &Source,
+    since_ms: Option<i64>,
+    tell: bool,
+    extra: Option<&Path>,
+) -> Probe {
     let empty = match agentmeter_claude::probe::EmptyDir::create() {
         Ok(dir) => dir,
         Err(e) => {
@@ -182,7 +198,7 @@ pub fn run_probe(source: &Source, since_ms: Option<i64>, tell: bool) -> Probe {
             };
         }
     };
-    let places = probe_places(&source.dataset, since_ms, &empty.0);
+    let places = probe_places(&source.dataset, since_ms, &empty.0, extra);
     if tell {
         let names: Vec<&str> = places.iter().map(|(p, _)| p.as_str()).collect();
         eprintln!(
@@ -199,10 +215,28 @@ pub fn run_probe(source: &Source, since_ms: Option<i64>, tell: bool) -> Probe {
 }
 
 fn run(options: &Options, interactive: bool) -> ExitCode {
+    let instructions_dir = match options.instructions.as_deref().map(Path::new) {
+        Some(dir) if !dir.is_dir() => {
+            eprintln!(
+                "agentmeter: --instructions: `{}` is not a directory",
+                dir.display()
+            );
+            return ExitCode::from(2);
+        }
+        other => other,
+    };
     let mut sources = read_sources(options.tool);
-    if sources
-        .iter()
-        .all(|s| s.dataset.stats.files == 0 && s.dataset.stats.compressed_files_unreadable == 0)
+    // A file scan needs no logs: the sources are the agents asked for.
+    if instructions_dir.is_some() && options.tool == Tool::All {
+        sources = read_sources(Tool::Claude)
+            .into_iter()
+            .chain(read_sources(Tool::Codex))
+            .collect();
+    }
+    if instructions_dir.is_none()
+        && sources
+            .iter()
+            .all(|s| s.dataset.stats.files == 0 && s.dataset.stats.compressed_files_unreadable == 0)
     {
         let places: Vec<String> = if sources.is_empty() {
             read_places_for_message()
@@ -235,11 +269,17 @@ fn run(options: &Options, interactive: bool) -> ExitCode {
                 s.dataset.retain_project(name);
             }
             let probe = (options.probe && s.tool == "claude")
-                .then(|| run_probe(s, since_ms, io::stderr().is_terminal()));
-            analyse(s, options, now_ms, probe)
+                .then(|| run_probe(s, since_ms, io::stderr().is_terminal(), instructions_dir));
+            let mut analysis = analyse(s, options, now_ms, probe);
+            if let Some(dir) = instructions_dir {
+                analysis.instructions =
+                    Some(scan_instructions(s.tool, dir, analysis.probe.as_ref()));
+            }
+            analysis
         })
         .collect();
     if let Some(name) = &options.project
+        && instructions_dir.is_none()
         && sources.iter().all(|s| s.dataset.requests.is_empty())
     {
         eprintln!("agentmeter: no project matches `{name}`");
@@ -263,6 +303,7 @@ fn run(options: &Options, interactive: bool) -> ExitCode {
             projects: a.projects.as_deref(),
             findings: a.findings.as_ref(),
             probe: a.probe.as_ref(),
+            instructions: a.instructions.as_ref(),
         })
         .collect();
     if options.json {
@@ -275,6 +316,34 @@ fn run(options: &Options, interactive: bool) -> ExitCode {
         print!("{}", blocks.join("\n"));
     }
     ExitCode::SUCCESS
+}
+
+/// The instruction files of one agent for `dir`; a probe that ran in `dir` confirms the files
+/// Claude Code lists as memory files.
+fn scan_instructions(tool: &str, dir: &Path, probe: Option<&Probe>) -> InstructionScan {
+    if tool != "claude" {
+        return agentmeter_codex::instructions::scan(dir, &agentmeter_codex::config_dirs(), None);
+    }
+    let mut scan =
+        agentmeter_claude::instructions::scan(dir, &agentmeter_claude::config_dirs(), None);
+    let run = probe.and_then(|p| p.runs.iter().find(|r| r.place == PROBE_INSTRUCTIONS_PLACE));
+    if let Some(run) = run {
+        for file in scan
+            .files
+            .iter_mut()
+            .filter(|f| f.state == LoadState::Expected)
+        {
+            if run.memory_files.iter().any(|m| m.label == file.path) {
+                file.state = LoadState::Confirmed;
+            }
+        }
+        scan.notes.push(format!(
+            "--probe: Claude Code listed {} memory file(s) in this directory; files it did not \
+             list stay 'expected'.",
+            run.memory_files.len()
+        ));
+    }
+    scan
 }
 
 /// Words for the reported period.
@@ -318,4 +387,55 @@ fn read_places_for_message() -> Vec<String> {
         )
         .map(|p| p.display().to_string())
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use agentmeter_core::model::ContextProbe;
+
+    #[test]
+    fn a_probe_in_the_directory_confirms_only_the_files_it_lists() {
+        let dir = std::env::temp_dir().join(format!("agentmeter-main-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let dir = std::fs::canonicalize(dir).unwrap();
+        std::fs::write(dir.join("CLAUDE.md"), "a\n").unwrap();
+        std::fs::write(dir.join("CLAUDE.local.md"), "b\n").unwrap();
+        let listed = dir.join("CLAUDE.md").display().to_string();
+        let run = |place: &str| ContextProbe {
+            place: place.to_owned(),
+            dir: dir.display().to_string(),
+            model: None,
+            total: 0,
+            sent: Vec::new(),
+            deferred: Vec::new(),
+            memory_files: vec![agentmeter_core::model::ProbeItem {
+                label: listed.clone(),
+                tokens: 1,
+            }],
+            mcp_servers: Vec::new(),
+        };
+        let state = |scan: &InstructionScan, name: &str| {
+            scan.files
+                .iter()
+                .find(|f| f.path == dir.join(name).display().to_string())
+                .unwrap()
+                .state
+        };
+        let probe = Probe {
+            runs: vec![run(PROBE_INSTRUCTIONS_PLACE)],
+            ..Probe::default()
+        };
+        let scan = scan_instructions("claude", &dir, Some(&probe));
+        assert_eq!(state(&scan, "CLAUDE.md"), LoadState::Confirmed);
+        assert_eq!(state(&scan, "CLAUDE.local.md"), LoadState::Expected);
+        // A probe of another place confirms nothing.
+        let other = Probe {
+            runs: vec![run("some project")],
+            ..Probe::default()
+        };
+        let scan = scan_instructions("claude", &dir, Some(&other));
+        assert_eq!(state(&scan, "CLAUDE.md"), LoadState::Expected);
+        let _ = std::fs::remove_dir_all(dir);
+    }
 }

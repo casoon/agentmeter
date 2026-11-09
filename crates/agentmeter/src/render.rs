@@ -2,6 +2,7 @@
 
 use agentmeter_core::findings::{Evaluation, Finding, Part};
 use agentmeter_core::format::{count, tokens};
+use agentmeter_core::instructions::{InstructionScan, LoadState};
 use agentmeter_core::model::{DataQuality, PROBE_EMPTY_PLACE, Probe, ProbeItem, ReadStats};
 use agentmeter_core::report::{ProjectRow, SessionRow, Summary};
 use runemark::{ColorMode, Console, Tone};
@@ -71,6 +72,7 @@ pub struct Report<'a> {
     pub projects: Option<&'a [ProjectRow]>,
     pub findings: Option<&'a Evaluation>,
     pub probe: Option<&'a Probe>,
+    pub instructions: Option<&'a InstructionScan>,
 }
 
 /// Widest the text gets, also in a wider terminal or a pipe; bars are at most [`BAR`] cells.
@@ -193,11 +195,109 @@ pub fn text(report: &Report, style: Style) -> String {
     if let Some(findings) = report.findings {
         out += &findings_text(findings, report.probe, style);
     }
+    if let Some(scan) = report.instructions {
+        out += &instructions_text(scan, style);
+    }
     if let Some(sessions) = report.sessions {
         out += &sessions_text(sessions, style);
     }
     if let Some(projects) = report.projects {
         out += &projects_text(projects, style);
+    }
+    out
+}
+
+fn state_word(state: LoadState) -> &'static str {
+    match state {
+        LoadState::Confirmed => "confirmed",
+        LoadState::Expected => "expected",
+        LoadState::OnDemand => "on demand",
+        LoadState::NotLoaded => "not loaded",
+        LoadState::Unreadable => "unreadable",
+        LoadState::Missing => "missing",
+    }
+}
+
+fn instructions_text(scan: &InstructionScan, style: Style) -> String {
+    let mut out = heading(style, "INSTRUCTIONS");
+    out += &wrap(style, &scan.dir, "  directory  ", "             ", 13);
+    out += &wrap(
+        style,
+        scan.rules_version,
+        "  rules      ",
+        "             ",
+        13,
+    );
+    out += &wrap(style, scan.method, "  method     ", "             ", 13);
+    let loaded = scan.files.iter().filter(|f| f.state.is_loaded()).count();
+    out += &format!(
+        "  at start   {} from {} of {} files (not counted: on demand, not loaded, missing)\n\n",
+        style.bold(&format!("≈{}", tokens(scan.loaded_est_tokens))),
+        loaded,
+        scan.files.len()
+    );
+    if scan.files.is_empty() {
+        out += "  no instruction files found\n";
+    }
+    // Paths below the scanned directory are shown relative to it; JSON keeps absolute paths.
+    let shown = |path: &str| -> String {
+        match std::path::Path::new(path).strip_prefix(&scan.dir) {
+            Ok(rel) if !rel.as_os_str().is_empty() => format!("./{}", rel.display()),
+            _ => path.to_owned(),
+        }
+    };
+    for file in &scan.files {
+        let size = if file.bytes == 0 {
+            "-".to_owned()
+        } else {
+            format!("≈{}", tokens(file.est_tokens))
+        };
+        let prefix = format!("  {:<10} {:>7}  ", state_word(file.state), size);
+        let rest = " ".repeat(prefix.chars().count());
+        let origin = match &file.via {
+            Some(via) => format!("{} (imported by {})", shown(&file.path), shown(via)),
+            None => format!("{} [{}]", shown(&file.path), file.scope),
+        };
+        out += &wrap(style, &origin, &prefix, &rest, prefix.chars().count());
+        if let Some(note) = &file.note {
+            out += &wrap(style, note, &rest, &rest, rest.chars().count());
+        }
+    }
+    for f in &scan.findings {
+        out += &format!(
+            "\n  {} {} · certainty {}\n",
+            style.tone(Tone::Warning, "◆"),
+            style.bold(f.rule),
+            f.certainty
+        );
+        out += &wrap(
+            style,
+            &format!("file    {}", shown(&f.file)),
+            "    ",
+            "            ",
+            4,
+        );
+        out += &wrap(
+            style,
+            &format!("measure {}", f.measure),
+            "    ",
+            "            ",
+            4,
+        );
+        out += &wrap(
+            style,
+            &format!("check   {}", f.check),
+            "    ",
+            "            ",
+            4,
+        );
+    }
+    if scan.findings.is_empty() {
+        out += "\n  no findings\n";
+    }
+    out += "\n";
+    for note in &scan.notes {
+        out += &wrap(style, note, "  note  ", "        ", 8);
     }
     out
 }
@@ -1076,6 +1176,9 @@ fn json_source(report: &Report) -> Value {
     }
     if let Some(v) = report.probe {
         put("probe", json!(v));
+    }
+    if let Some(v) = report.instructions {
+        put("instructions", json!(v));
     }
     if let Some(v) = report.findings {
         put("verdict", json!(v.verdict));

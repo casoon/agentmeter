@@ -7,6 +7,10 @@ behaviour.
 
 ## [Unreleased]
 
+### Added
+
+- **CLI:** `--instructions <dir>` lists the instruction files that apply to a directory by each agent's own loading rules (Claude Code: `CLAUDE.md` hierarchy, rules, imports, excludes; Codex: `AGENTS.md` from the `.git` root with `project_doc_max_bytes`) with source, size, estimated tokens and load state (`expected`, `confirmed` via `--probe`, `on_demand`, `not_loaded`, `unreadable`, `missing`); findings `broken-import`, `duplicate-instructions`, `base-size`, `load-limit`. Reads files only; JSON key `instructions` ([#12](https://github.com/casoon/agentmeter/issues/12)).
+
 ### Changed
 
 - **Pages:** the project site uses the current shared theme (0.12.6).
