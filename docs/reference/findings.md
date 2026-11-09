@@ -53,6 +53,23 @@ counter-examples and one concrete next step to check. JSON output has the same f
 | `long-session` | Info | Sessions that span more than 24 hours. Wall-clock time says little about cost; a long pause costs nothing. |
 | `config-size` | Hint | Size and count of instruction files, skills, hooks and MCP servers, only when you ask for the configuration check. |
 
+## Instruction-file rules
+
+Only with `--instructions <dir>`, from today's files rather than the logs. Each finding names
+the file, the measure, its certainty and one step to check.
+
+| Id | Certainty | Measures |
+| --- | --- | --- |
+| `broken-import` | medium | An `@path` import in a loaded Claude file whose target does not exist. A token that looks like a path but is no import is a false positive. |
+| `duplicate-instructions` | high | Files with byte-identical content that both load at start. |
+| `base-size` | low | Estimated tokens (bytes ÷ 4) of the files expected at start, from 10,000. Large is not wrong; the threshold is uncalibrated. |
+| `load-limit` | high | Codex only: project files exceed `project_doc_max_bytes`, so the end is not loaded. |
+
+A file's state is `expected` by the loading rules, `confirmed` when `--probe` lists it. Rules
+followed: Claude Code memory documentation and Codex `AGENTS.md` discovery (rust-v0.165), both as
+of 2026-11; the two agents share no heuristic. Not evaluated: Codex project trust, contradictions
+between files.
+
 More rules are planned; see the project plan before relying on a rule that is not listed here.
 
 ## How the numbers are derived

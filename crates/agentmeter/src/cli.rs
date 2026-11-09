@@ -53,6 +53,8 @@ pub struct Options {
     pub json: bool,
     /// Ask Claude Code (`claude -p /context`) what a session start holds; implies findings.
     pub probe: bool,
+    /// Scan the instruction files that apply to this directory; implies nothing else.
+    pub instructions: Option<String>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -96,6 +98,10 @@ where
                 options.probe = true;
                 options.findings = true;
             }
+            "--instructions" => match args.next() {
+                Some(value) => options.instructions = Some(value),
+                None => return Invocation::Error("--instructions needs a directory".to_owned()),
+            },
             "--since" => match args.next() {
                 Some(value) => match parse_since(&value) {
                     Some(since) => options.since = Some(since),
@@ -136,7 +142,8 @@ where
             "--probe asks Claude Code; it does not apply to codex".to_owned(),
         );
     }
-    if !(options.sessions || options.projects || options.findings) {
+    if !(options.sessions || options.projects || options.findings || options.instructions.is_some())
+    {
         options.summary = true;
     }
     Invocation::Run(options)
@@ -169,6 +176,10 @@ Options:
                          busiest projects. Answered locally, no model request and no
                          session file, but it starts claude with that directory's
                          configuration (MCP servers, hooks). Implies --findings.
+      --instructions <dir>
+                         The instruction files that apply to <dir> (CLAUDE.md, AGENTS.md, rules,
+                         imports): where from, size, whether they load at session start. Reads
+                         files only; with --probe, Claude Code confirms what it loads there.
       --json             Print JSON instead of text (schema: docs/reference/json.md)
       --check <name>     data-quality: exit 1 if a source has unreadable data or none to
                          analyse, 0 otherwise, 2 for a bad call. Findings never fail it.
@@ -240,6 +251,16 @@ mod tests {
             run(&["--probe", "--tool", "codex"]),
             Invocation::Error(_)
         ));
+    }
+
+    #[test]
+    fn instructions_takes_a_directory_and_stands_alone() {
+        let Invocation::Run(options) = run(&["--instructions", "/x"]) else {
+            panic!("expected a run");
+        };
+        assert_eq!(options.instructions.as_deref(), Some("/x"));
+        assert!(!options.summary);
+        assert!(matches!(run(&["--instructions"]), Invocation::Error(_)));
     }
 
     #[test]

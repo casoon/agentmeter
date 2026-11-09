@@ -6,6 +6,7 @@
 pub mod check;
 pub mod findings;
 pub mod format;
+pub mod instructions;
 pub mod model;
 pub mod report;
 pub mod time;

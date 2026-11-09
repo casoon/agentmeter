@@ -1,0 +1,4 @@
+---
+paths: ["api/**"]
+---
+API rule.

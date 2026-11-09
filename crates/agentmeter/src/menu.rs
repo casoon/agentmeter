@@ -235,6 +235,7 @@ fn detail(id: &str, views: &[View], period: &str, style: Style) -> String {
                 projects: a.projects.as_deref().filter(|_| id == "projects"),
                 findings: a.findings.as_ref().filter(|_| id.starts_with("rule:")),
                 probe: a.probe.as_ref().filter(|_| id.starts_with("rule:")),
+                instructions: None,
             };
             render::text(&report, style)
         })
@@ -337,7 +338,7 @@ pub fn run(mut sources: Vec<Source>, now_ms: i64) -> ExitCode {
             Ok(Outcome::Selected(id)) if id == "probe" => {
                 if let Some(claude) = sources.iter().find(|s| s.tool == "claude") {
                     let since_ms = period.since().map(|s| s.start_ms(now_ms));
-                    probe = Some(run_probe(claude, since_ms, true));
+                    probe = Some(run_probe(claude, since_ms, true, None));
                 }
                 show = Some("rule:baseline-load".to_owned());
             }

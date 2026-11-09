@@ -108,6 +108,7 @@ agentmeter --sessions          # sessions by input
 agentmeter --projects          # projects by input
 agentmeter --findings          # rules with conclusion, measure, evidence and next step
 agentmeter --probe             # also ask Claude Code what a session start holds (see below)
+agentmeter --instructions .  # the instruction files that apply to a directory (see below)
 agentmeter --tool codex        # claude, codex or all (default)
 agentmeter --since 7d          # 7d, 30d or a date such as 2026-10-01
 agentmeter --project <name>    # one project
@@ -135,6 +136,29 @@ the probe only runs when asked for (`--probe`, or *Context probe* in the menu). 
 today's configuration, not the one the period ran with, and it measures the command-line
 `claude`: the report names the front end that wrote the sessions, since a desktop app or IDE adds
 instructions and tools of its own.
+
+## Instruction files: `--instructions <dir>`
+
+Shows which instruction files apply to one directory, where each comes from, how large it is and
+whether the agent's loading rules put it into the context at session start. The files are only
+read, no agent is started. Each agent follows its own rules and the output names the version of
+the documentation they come from:
+
+- **Claude Code:** `CLAUDE.md`, `.claude/CLAUDE.md` and `CLAUDE.local.md` in the directory and
+  every directory above it, `~/.claude/CLAUDE.md`, rules in `.claude/rules/` (with `paths:`
+  frontmatter: on demand), `@path` imports up to four hops, `claudeMdExcludes`, `AGENTS.md` only
+  when no `CLAUDE.md` exists. Files in subdirectories load on demand.
+- **Codex CLI:** `AGENTS.override.md` or `AGENTS.md` in the Codex home, then from the `.git`
+  root down to the directory one file per directory, cut at `project_doc_max_bytes` (default
+  32 KiB).
+
+Every file has a state: `expected` (the rules say it loads), `confirmed` (with `--probe`, Claude
+Code lists it), `on demand`, `not loaded` (excluded, shadowed, beyond a limit), `unreadable` or
+`missing`. Only expected and confirmed files count towards the size at start; tokens are
+estimated as bytes ÷ 4. Findings (`broken-import`, `duplicate-instructions`, `base-size`,
+`load-limit`) carry file, measure, certainty and a step to check; a large file alone is none.
+This is today's configuration, separate from the log history. Worktrees are separate paths:
+scan the worktree to see its files. Rules in [Findings](docs/reference/findings.md).
 
 ## Privacy
 
