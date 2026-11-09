@@ -65,6 +65,20 @@ compaction are compared with what the same log did before: re-read areas (file a
 not edited since) and repeated identical failed calls are counted, with the compaction as
 evidence. That count is not an avoidable amount.
 
+## Compaction causes
+
+`--compaction-causes` is a grouping, not a rule: it counts the compactions the summary counts by
+project, model and session and words patterns as hints with a lever, never as the cause. It
+adds to `compact-thrash`, `long-session` and `big-context` without recounting: those rules are
+shown with their status, and the hints only count compactions in the same places (`see_rule`).
+Three patterns: automatic compactions of one model that began in a narrow band of sizes (lever:
+the model's window or a setting), half of the compactions or more in sessions of more than 24
+hours, and half or more in one project when others exist (lever: the way of working). Thresholds
+are uncalibrated. Unknown triggers and sizes stay unknown (always for Codex). With
+`--compaction-settings` today's `autoCompactWindow` (per model under `modelSettings`, Claude Code
+2.1.288 or later; `autoCompactEnabled`) is compared with the median size before automatic
+compactions; the setting is today's content of the files and is never claimed for the past.
+
 ## Tool-call rules
 
 Only with `--tool-calls`. Each observation carries the period, the sample, counter-examples that

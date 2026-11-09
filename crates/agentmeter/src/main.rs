@@ -72,6 +72,8 @@ pub struct Analysis {
     pub tool_calls: Option<ToolAnalysis>,
     /// What `--transitions` found.
     pub transitions: Option<agentmeter_core::transitions::TransitionReport>,
+    /// What `--compaction-causes` found.
+    pub compaction_causes: Option<agentmeter_core::compaction::CausesReport>,
 }
 
 pub fn read_sources(tool: Tool) -> Vec<Source> {
@@ -140,6 +142,18 @@ pub fn analyse(source: &Source, options: &Options, now_ms: i64, probe: Option<Pr
         instructions: None,
         transitions: options.transitions.then(|| {
             agentmeter_core::transitions::analyse(dataset, source.tools.as_ref(), since_ms)
+        }),
+        compaction_causes: options.compaction_causes.then(|| {
+            // The settings files are read only when asked for, and only for Claude Code.
+            let settings = (options.compaction_settings && source.tool == "claude").then(|| {
+                agentmeter_claude::settings::read(&agentmeter_claude::config_dirs(), dataset)
+            });
+            agentmeter_core::compaction::analyse(
+                dataset,
+                since_ms,
+                settings,
+                options.compaction_settings,
+            )
         }),
         tool_calls: source
             .tools
@@ -337,6 +351,7 @@ fn run(options: &Options, interactive: bool) -> ExitCode {
             instructions: a.instructions.as_ref(),
             tool_calls: a.tool_calls.as_ref(),
             transitions: a.transitions.as_ref(),
+            compaction_causes: a.compaction_causes.as_ref(),
         })
         .collect();
     if options.json {

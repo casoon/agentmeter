@@ -10,6 +10,7 @@
 pub mod instructions;
 pub mod probe;
 mod raw;
+pub mod settings;
 
 use agentmeter_core::model::{Compaction, Dataset, ReadStats, Request, SessionStart};
 use agentmeter_core::time::parse_iso_ms;

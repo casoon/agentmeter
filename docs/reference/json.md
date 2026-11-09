@@ -35,6 +35,7 @@ list under it names every field of that object. The tests compare these lists wi
 - `rules` — only with `--findings`: the status of every rule, once each.
 - `probe` — only with `--probe` and only for `claude`: what Claude Code's `/context` reported.
 - `transitions` — only with `--transitions`: starts, resumes and forks, compactions and pauses with the context around them.
+- `compaction_causes` — only with `--compaction-causes` or `--compaction-settings`: compactions by project, model and session with hints at the lever, and with the second flag today's auto-compact setting.
 - `tool_calls` — only with `--tool-calls`: repeated reads, repeated failures and large outputs, from tool calls and results.
 - `instructions` — only with `--instructions <dir>`: the instruction files that apply to that directory for this agent.
 
@@ -252,6 +253,138 @@ measured, not proven avoidable. The compactions are the events the summary count
 - `then_log_ends` — compaction only: no later compaction in this file, so the count runs to the end of the log.
 - `parent` — resume or fork only: `id` of the session the log names and `in_logs` (that session's log was read); otherwise `null`.
 - `repeats` — compaction only, with `--tool-calls`: `window` (in words), `calls_checked`, `reads`, `reread_areas` (reads of a file and line range read before the compaction and not edited since), `failures_repeated` (identical failed calls repeated) and `examples` (up to three files); otherwise `null`. A count of what happened, not proof the re-read was avoidable.
+
+### `sources[].compaction_causes`
+
+The compactions the summary counts, grouped; nothing is recounted from another source. A pattern
+is worded as a hint with the lever it points to (`setting_or_window` or `working_style`), never
+as the cause. A missing trigger or size stays unknown (always for Codex). Counts and rates use
+the main conversation; a compaction event names no model, so each takes the model of the request
+just before it.
+
+- `method` — how the groups were built.
+- `totals` — all compactions of the period, as a group.
+- `projects` — one group per project with compactions, most compactions first; the fields of `totals`.
+- `models` — one group per model, the same fields; `unknown` when no request names a model.
+- `sessions` — sessions with at least one compaction.
+- `observations` — patterns above the thresholds; empty when there is none.
+- `related_rules` — `compact-thrash`, `big-context` and `long-session` as the findings report them, not recounted.
+- `settings` — only with `--compaction-settings` for `claude`: today's settings files; otherwise `null`.
+- `settings_comparison` — only with `--compaction-settings` for `claude`: today's window against the observed sizes; otherwise empty.
+- `notes` — limits of the view.
+
+### `sources[].compaction_causes.totals`
+
+- `key` — `all` for the totals, else the project, model or session id.
+- `compactions` — compactions in the period.
+- `requests` — main-conversation requests of the group in the period.
+- `per_1000_requests` — compactions per 1,000 of those requests, or `null` without requests.
+- `triggers` — compactions by trigger.
+- `tokens_before` — size before compaction, or `null` without compactions.
+- `without_tokens_after` — compactions whose size after compaction the log does not state (always, for Codex); never counted as zero.
+
+### `sources[].compaction_causes.totals.triggers`
+
+- `auto` — started by the agent when the window filled up.
+- `manual` — started by the user.
+- `unknown` — the log does not say (always for Codex).
+
+### `sources[].compaction_causes.totals.tokens_before`
+
+- `min` — smallest size before compaction, as the log states it (Codex: the context of the last request before the event).
+- `q1` — first quartile.
+- `median` — median.
+- `q3` — third quartile.
+- `max` — largest size.
+
+### `sources[].compaction_causes.sessions[]`
+
+- `key` — session id.
+- `compactions` — compactions of the session.
+- `requests` — main-conversation requests of the session in the period.
+- `per_1000_requests` — compactions per 1,000 requests, or `null`.
+- `triggers` — as in `totals`.
+- `tokens_before` — as in `totals`.
+- `without_tokens_after` — as in `totals`.
+- `project` — project name.
+- `span_ms` — first to last request in the period, idle time included.
+- `peak_context` — the largest context of a request of the session.
+
+#### `sources[].compaction_causes.observations[]`
+
+Not checked against the output by the generic field test; a test of its own does.
+
+- `kind` — `size_band` (automatic compactions of one model began within a narrow band, as a fixed limit produces), `long_sessions` (half of the compactions or more fell in sessions of more than 24 hours) or `concentrated` (one project holds half of the compactions or more while others exist).
+- `scope` — model name, project name or `all`.
+- `message` — the observation in words.
+- `compactions` — compactions the observation counts.
+- `of` — compactions of the scope it is taken from.
+- `lever` — `setting_or_window` or `working_style`.
+- `certainty` — always `hint`: a pattern in the logs, not a cause.
+- `see_rule` — the rule that already reports the same behaviour (`long-session`, `big-context`), else `null`; the observation counts compactions in it and is not a second finding.
+- `check` — what to check and where an effect would show.
+
+### `sources[].compaction_causes.related_rules[]`
+
+- `rule` — `compact-thrash`, `big-context` or `long-session`.
+- `status` — `observed`, `checked_none` or `not_measurable`, as in `rules`.
+- `message` — what the rule measured, or `null`.
+- `reason` — why it could not be measured, or `null`.
+
+### `sources[].compaction_causes.settings`
+
+Only the auto-compact keys of the Claude Code settings files, and only with
+`--compaction-settings`. The files are read as they are now; the content is never attributed to
+compactions of the past. Managed settings, `CLAUDE_CODE_AUTO_COMPACT_WINDOW` and `--autocompact`
+are not visible here and take precedence over the files.
+
+- `reference` — the documentation and versions the keys come from: `autoCompactWindow` (100000 to 1000000 tokens, any settings file), `modelSettings.<model>.autoCompactWindow` (a number or `"auto"`, Claude Code 2.1.288 or later; before it `/autocompact` saved the top-level key) and `autoCompactEnabled`.
+- `as_of` — says that the files are read as they are now.
+- `files` — every file looked at, with its state.
+- `windows` — the window settings found.
+- `auto_compact_enabled` — `autoCompactEnabled` values found.
+- `projects_not_read` — projects whose working directory is unknown or gone, so their project and local settings were not looked at (unknown, not absent).
+
+### `sources[].compaction_causes.settings.files[]`
+
+User settings (`settings.json` of each configuration directory) and, per project, `.claude/settings.json` and `.claude/settings.local.json` in the working directory of its latest session.
+
+- `path` — the file.
+- `scope` — `user`, `project` or `local`.
+- `project` — project name for `project` and `local`, else `null`.
+- `state` — `read`, `missing`, `unreadable` or `invalid_json`.
+
+### `sources[].compaction_causes.settings.windows[]`
+
+- `file` — the file the entry is from.
+- `scope` — `user`, `project` or `local`.
+- `project` — project name for `project` and `local`, else `null`.
+- `model` — the model of a `modelSettings` entry, `null` for every model.
+- `tokens` — as written, `null` for `"auto"` (the window tuned for the model, not stated in the logs).
+- `note` — set when the number lies outside 100,000 to 1,000,000, which Claude Code limits it to.
+
+### `sources[].compaction_causes.settings.auto_compact_enabled[]`
+
+- `file` — the file the entry is from.
+- `scope` — `user`, `project` or `local`.
+- `project` — project name for `project` and `local`, else `null`.
+- `enabled` — `autoCompactEnabled` as written; `false` turns automatic compaction off.
+
+### `sources[].compaction_causes.settings_comparison[]`
+
+One entry per project and model with compactions. The window that applies today is the first of local, project and user settings; in a file the entry for the model comes before the general one. A hint, not proof.
+
+- `project` — project name.
+- `model` — model of the compactions (the request before each).
+- `setting` — the window that applies, with the fields of `windows[]`, or `null` when none is set.
+- `auto_compact_enabled` — `autoCompactEnabled` that applies, or `null`.
+- `automatic_compactions` — automatic compactions of the pair with a known size.
+- `median_tokens_before` — their median, or `null`.
+- `max_tokens_before` — their largest, or `null`.
+- `median_share_of_window_pct` — the median as a percent of the window, or `null`.
+- `above_window` — automatic compactions larger than the window.
+- `fit` — `within` (median 70 to 105 percent of the window), `below`, `above`, `no_setting`, `auto_value` or `not_measurable`; the limits are uncalibrated.
+- `message` — the comparison in words, marked as today's setting.
 
 ### `sources[].tool_calls`
 

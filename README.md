@@ -109,6 +109,8 @@ agentmeter --projects          # projects by input
 agentmeter --findings          # rules with conclusion, measure, evidence and next step
 agentmeter --probe             # also ask Claude Code what a session start holds (see below)
 agentmeter --transitions        # starts, resumes, compactions, pauses as a timeline (see below)
+agentmeter --compaction-causes  # compactions by project, model, session; hints at the lever (see below)
+agentmeter --compaction-settings # also compare today's autoCompactWindow with them (reads settings files)
 agentmeter --tool-calls        # also read tool calls: repeated reads/failures, large outputs (see below)
 agentmeter --instructions .  # the instruction files that apply to a directory (see below)
 agentmeter --tool codex        # claude, codex or all (default)
@@ -149,6 +151,25 @@ where the log does; sessions are never linked by time, and a pause or a new chat
 a loss of context. With `--tool-calls` each compaction also counts the areas read again in the
 next 30 calls that were read before it and not edited since, and a project hint appears when this
 repeats; consumption after a transition is measured, not proven avoidable.
+
+## Compaction causes: `--compaction-causes`
+
+Compactions by project, model and session: count, size before the compaction (minimum,
+quartiles, maximum), automatic, manual and unknown trigger, and compactions per 1,000 requests.
+A missing trigger or size stays unknown (always for Codex). Patterns are worded as hints with the
+lever they point to, never as the cause: sizes in a narrow band (a limit: the model's window or
+a setting), most compactions in sessions of more than 24 hours or in one project (the way of
+working). `compact-thrash`, `long-session` and `big-context` are shown as they report; the hints
+only count compactions in the same places.
+
+`--compaction-settings` also reads the auto-compact keys of the Claude Code settings files:
+`autoCompactWindow`, `modelSettings.<model>.autoCompactWindow` (Claude Code 2.1.288 or later) and
+`autoCompactEnabled`, from `settings.json` of the configuration directory and from
+`.claude/settings.json` and `.claude/settings.local.json` in each project's latest working
+directory. Without this flag no file outside the logs is read. The value is today's, never
+assigned to compactions of the past; a window that does not show in the observed sizes is a
+hint, not proof. Managed settings, the environment variable and the command-line flag are not
+visible and take precedence.
 
 ## Tool calls: `--tool-calls`
 
