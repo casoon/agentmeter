@@ -17,6 +17,17 @@ fn load(name: &str) -> Dataset {
 }
 
 #[test]
+fn subagent_log_names_its_parent_by_the_session_folder() {
+    let d = load("epoch-current");
+    assert_eq!(d.agent_links.len(), 1);
+    let link = &d.agent_links[0];
+    assert_eq!(
+        (link.agent.as_str(), link.parent.as_deref(), link.basis),
+        ("agent-1", Some("sess-main"), Some("session_folder"))
+    );
+}
+
+#[test]
 fn streaming_duplicates_keep_the_largest_copy() {
     let d = load("epoch-streaming");
     // msg_A appears three times with output 5, 5, 300; msg_B once; the synthetic line is no request.

@@ -65,6 +65,18 @@ compaction are compared with what the same log did before: re-read areas (file a
 not edited since) and repeated identical failed calls are counted, with the compaction as
 evidence. That count is not an avoidable amount.
 
+## Subagents
+
+`--subagents` is a report, not a rule. It splits the requests of the period three ways that add
+up to the summary's: direct requests of sessions, requests of agents whose named parents lead to
+a session (nested agents count once, under their root), and requests of agents without a named
+parent. Parents come from the logs only; project and time never link. Overlap is computed from
+runs of requests less than an hour apart and says nothing about run time (the logs hold none) or
+about conflicting work. A shared read or write (with `--tool-calls`, not for Codex) is a reason to
+check. The report states evidence (log file per agent) and counter-examples (agents that read
+other lines of a file, time-only overlaps, expected overlap of a session and its own agent); it
+makes no claim that delegation is inefficient or that parallel work saves time.
+
 ## Tool-call rules
 
 Only with `--tool-calls`. Each observation carries the period, the sample, counter-examples that

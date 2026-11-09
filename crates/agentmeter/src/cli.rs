@@ -59,6 +59,8 @@ pub struct Options {
     pub tool_calls: bool,
     /// Timeline of starts, resumes, compactions and pauses.
     pub transitions: bool,
+    /// Consumption of main sessions and delegated agents, overlap, shared files.
+    pub subagents: bool,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -100,6 +102,7 @@ where
             "--json" => options.json = true,
             "--tool-calls" => options.tool_calls = true,
             "--transitions" => options.transitions = true,
+            "--subagents" => options.subagents = true,
             "--probe" => {
                 options.probe = true;
                 options.findings = true;
@@ -153,7 +156,8 @@ where
         || options.findings
         || options.instructions.is_some()
         || options.tool_calls
-        || options.transitions)
+        || options.transitions
+        || options.subagents)
     {
         options.summary = true;
     }
@@ -199,6 +203,10 @@ Options:
                          with the context around each; with --tool-calls also the areas read
                          again right after a compaction. Metadata only; a pause or a new chat
                          is a marker, never a verdict.
+      --subagents        Consumption of main sessions and of the agents they delegated to,
+                         only where the log names the parent; runs that overlapped in time;
+                         with --tool-calls files several agents read or wrote. Metadata only;
+                         an overlap is a reason to look, not a conflict.
       --json             Print JSON instead of text (schema: docs/reference/json.md)
       --check <name>     data-quality: exit 1 if a source has unreadable data or none to
                          analyse, 0 otherwise, 2 for a bad call. Findings never fail it.
@@ -300,6 +308,14 @@ mod tests {
             panic!("expected a run");
         };
         assert!(options.transitions && !options.summary && !options.tool_calls);
+    }
+
+    #[test]
+    fn subagents_is_a_flag_of_its_own() {
+        let Invocation::Run(options) = run(&["--subagents"]) else {
+            panic!("expected a run");
+        };
+        assert!(options.subagents && !options.summary && !options.tool_calls);
     }
 
     #[test]

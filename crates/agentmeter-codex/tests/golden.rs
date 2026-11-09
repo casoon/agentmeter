@@ -100,6 +100,12 @@ fn subagent_replay_of_the_parent_is_not_counted_twice() {
         1,
         "a sub-agent rollout is no session start"
     );
+    // The only parent evidence in this rollout is the copied history of cx-p.
+    let link = &d.agent_links[0];
+    assert_eq!(
+        (link.agent.as_str(), link.parent.as_deref(), link.basis),
+        ("cx-s", Some("cx-p"), Some("copied_history"))
+    );
 }
 
 #[test]

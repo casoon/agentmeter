@@ -16,7 +16,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 type LineRange = (u64, u64);
 
 /// A gap between two requests of one stream from this long on is listed as a pause.
-const PAUSE_MS: i64 = 60 * 60 * 1000;
+pub(crate) const PAUSE_MS: i64 = 60 * 60 * 1000;
 /// Tool calls after a compaction that are checked for repeated work.
 const WINDOW_CALLS: usize = 30;
 /// Compactions with re-reads, at least this many, for the project hint.

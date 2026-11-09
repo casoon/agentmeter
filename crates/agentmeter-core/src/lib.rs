@@ -9,6 +9,7 @@ pub mod format;
 pub mod instructions;
 pub mod model;
 pub mod report;
+pub mod subagents;
 pub mod time;
 pub mod toolcalls;
 pub mod transitions;

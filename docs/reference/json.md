@@ -35,6 +35,7 @@ list under it names every field of that object. The tests compare these lists wi
 - `rules` — only with `--findings`: the status of every rule, once each.
 - `probe` — only with `--probe` and only for `claude`: what Claude Code's `/context` reported.
 - `transitions` — only with `--transitions`: starts, resumes and forks, compactions and pauses with the context around them.
+- `subagents` — only with `--subagents`: direct and delegated usage per session, overlapping runs and shared files.
 - `tool_calls` — only with `--tool-calls`: repeated reads, repeated failures and large outputs, from tool calls and results.
 - `instructions` — only with `--instructions <dir>`: the instruction files that apply to that directory for this agent.
 
@@ -252,6 +253,114 @@ measured, not proven avoidable. The compactions are the events the summary count
 - `then_log_ends` — compaction only: no later compaction in this file, so the count runs to the end of the log.
 - `parent` — resume or fork only: `id` of the session the log names and `in_logs` (that session's log was read); otherwise `null`.
 - `repeats` — compaction only, with `--tool-calls`: `window` (in words), `calls_checked`, `reads`, `reread_areas` (reads of a file and line range read before the compaction and not edited since), `failures_repeated` (identical failed calls repeated) and `examples` (up to three files); otherwise `null`. A count of what happened, not proof the re-read was avoidable.
+
+### `sources[].subagents`
+
+Opt-in with `--subagents`. Requests are split into the direct ones of main sessions and those of
+delegated agents. An agent belongs to a session only where the log names its parent (Claude Code:
+the session folder of the agent's log; Codex: the spawn record, the fork id, or the parent
+history copied into the rollout); a project name or closeness in time never makes a delegation,
+and an agent without a named parent stays unassigned. Replays of parent messages and duplicate
+usage events are dropped as in the summary. With `--tool-calls` the file accesses of the streams
+are compared; without them, or where the log has no file targets (Codex), those fields are `null`
+and `notes` says so.
+
+- `method` — how the report was built.
+- `file_data` — `true` when file targets of tool calls were read and the log records them.
+- `counts` — sessions, agents and overlapping pairs.
+- `totals` — the requests of the period counted once, split three ways.
+- `roots` — the sessions that delegated, with input per direct and delegated use, busiest first.
+- `unassigned` — agents without a usable parent chain, with the fields of `roots[].children`.
+- `overlaps` — pairs of streams whose runs overlap in time, at most 20, those with the most shared files first.
+- `counterexamples` — what looks like the pattern but is not one, with numbers.
+- `notes` — limits of the view.
+
+### `sources[].subagents.counts`
+
+- `sessions` — main sessions with requests in the period.
+- `sessions_with_agents` — of those (or parents whose own log was not read), sessions with at least one assigned agent.
+- `agents` — agent streams with requests in the period, assigned or not.
+- `nested_agents` — assigned agents at depth 2 or more.
+- `max_depth` — the longest chain of named parents from a session, `0` without agents.
+- `unassigned_agents` — agents without a usable parent chain.
+- `overlaps_delegation` — overlapping pairs where one is an ancestor of the other by named parents.
+- `overlaps_same_task` — overlapping agents of one session that are not ancestor and descendant.
+- `overlaps_time_only` — overlapping pairs the logs do not relate in any way.
+
+### `sources[].subagents.totals`
+
+`direct + delegated + unassigned` is `requests`, and `requests` and `input` are the summary's for
+the same period. Inclusive sums (`roots[].inclusive_input`) are derived and never added to these.
+
+- `requests` — requests in the period.
+- `input` — their input: fresh, cache read and cache write.
+- `direct` — usage of main sessions.
+- `delegated` — usage of agents whose parent chain leads to a session.
+- `unassigned` — usage of agents whose parent the logs do not name.
+
+### `sources[].subagents.roots[]`
+
+- `session` — session id the agents name as their root; a parent whose own log was not read still appears.
+- `project` — project name.
+- `in_logs` — `true` when the session's own requests were read.
+- `direct` — the session's own usage.
+- `delegated` — usage of all its agents, nested ones once.
+- `inclusive_input` — `direct.input + delegated.input`, derived for reading.
+- `agents` — assigned agents.
+- `max_depth` — longest chain among them.
+- `first` — first request of session or agents.
+- `last` — last request of session or agents.
+- `span_ms` — last minus first request.
+- `active_ms` — the lengths of the runs added up. The logs hold no run time: a run is a stretch of requests less than an hour apart, its length is first to last request and still contains waiting, and a run of one request has no observed length.
+- `paused_ms` — gaps of an hour or more between runs; `active_ms + paused_ms = span_ms`.
+- `runs` — number of runs.
+- `shared_reads` — areas (file and line range) read by two or more streams of the session; `null` when not measurable.
+- `shared_reads_other_ranges` — files read by two or more streams but never the same lines (counter-example); `null` when not measurable.
+- `shared_writes` — files written by two or more streams; a reason to check, not a conflict; `null` when not measurable.
+- `shared_examples` — up to three file paths among them.
+- `start_context` — first requests of the agents (`agents`, `context`, `fresh`, `cache_read`, `cache_write`), only with two or more agents and recorded cache writes, otherwise `null`. A measure of what was sent, not a verdict on delegating.
+- `children` — the assigned agents, largest input first.
+
+### `sources[].subagents.roots[].direct`
+
+The same fields describe `delegated`, `totals.direct`, `totals.delegated`, `totals.unassigned` and
+`children[].usage`.
+
+- `requests` — requests.
+- `input` — `fresh + cache_read + cache_write`.
+- `fresh` — input neither read from nor written to the cache.
+- `cache_read` — input read from the cache.
+- `cache_write` — input written to the cache.
+- `output` — output tokens.
+- `models` — requests per model name, `unknown` for requests without one.
+
+### `sources[].subagents.roots[].children[]`
+
+- `agent` — the agent's id as the log gives it; `null` when the stream has no agent log of its own.
+- `parent` — the session or agent the log names as parent; `null` when it names none.
+- `parent_basis` — where the log names it: `session_folder` (Claude Code), `spawn_record`, `fork_record` or `copied_history` (Codex; the weakest, taken from parent history copied into the rollout); `null` with the parent.
+- `depth` — steps from the root session along named parents, 1 for a direct child; `null` when the chain does not reach a session.
+- `project` — project name.
+- `file` — the agent's log file, the evidence.
+- `first` — its first request.
+- `last` — its last request.
+- `usage` — its usage, with the fields of `roots[].direct`.
+
+### `sources[].subagents.overlaps[]`
+
+Overlap is between runs of requests and says nothing about conflicting work. `relation` tells a
+delegation the logs name from two streams that merely ran at the same time.
+
+- `first` — session or agent id; the log file when the agent has no id.
+- `first_kind` — `session` or `agent`.
+- `second` — as `first`.
+- `second_kind` — `session` or `agent`.
+- `relation` — `delegation`, `same_task` or `time_only`.
+- `overlap_ms` — time both were in a run; `0` when one run is a single request inside the other.
+- `shared_reads` — areas both read while both were in a run; `null` when not measurable.
+- `shared_writes` — files both wrote while both were in a run; `null` when not measurable.
+- `examples` — up to three of those files.
+- `files` — the two log files the pair is based on.
 
 ### `sources[].tool_calls`
 

@@ -32,6 +32,9 @@ pub struct RawMeta {
     pub forked_from_id: Option<String>,
     #[serde(default)]
     pub originator: Option<String>,
+    /// A string for most sessions; for a sub-agent an object that names the parent thread.
+    #[serde(default)]
+    pub source: Option<serde_json::Value>,
 }
 
 #[derive(Deserialize)]

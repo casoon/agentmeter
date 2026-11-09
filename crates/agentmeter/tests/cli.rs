@@ -282,6 +282,7 @@ fn documented_json_fields_equal_the_real_ones() {
             "--probe",
             "--tool-calls",
             "--transitions",
+            "--subagents",
             "--instructions",
             fixtures().join("instr/claude/repo").to_str().unwrap(),
         ],
@@ -290,7 +291,7 @@ fn documented_json_fields_equal_the_real_ones() {
     assert_eq!(v["schema_version"], 1);
     let documented = documented_fields();
     assert!(
-        documented.len() == 28,
+        documented.len() == 35,
         "the doc lists the objects: {documented:?}"
     );
     for (path, fields) in &documented {
@@ -790,4 +791,412 @@ fn codex_transitions_leave_unknown_sizes_unknown() {
         .unwrap();
     let c = all.iter().find(|x| x["kind"] == "compaction").unwrap();
     assert!(c["context_after"].is_null());
+}
+
+/// Claude logs for `--subagents`: a main session with two agents in its session folder (one
+/// repeats a message of the parent: a replay), an agent log outside any session folder (no named
+/// parent) and an independent chat of another project that runs at the same time.
+fn subagents_config(name: &str) -> std::path::PathBuf {
+    let dir =
+        std::env::temp_dir().join(format!("agentmeter-cli-sub-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let project = dir.join("projects/-Users-me-GitHub-demo");
+    let other = dir.join("projects/-Users-me-GitHub-other");
+    std::fs::create_dir_all(project.join("s-main/subagents")).unwrap();
+    std::fs::create_dir_all(project.join("subagents")).unwrap();
+    std::fs::create_dir_all(&other).unwrap();
+    // `agent` is the sessionId the line carries; sub-agent lines carry the parent's.
+    let line = |session: &str,
+                side: bool,
+                ts: &str,
+                id: &str,
+                req: &str,
+                tool: Option<(&str, &str)>| {
+        let content = tool.map_or("[]".to_owned(), |(name, path)| {
+            format!(
+                r#"[{{"type":"tool_use","id":"tu-{id}","name":"{name}","input":{{"file_path":"{path}"}}}}]"#
+            )
+        });
+        format!(
+            r#"{{"type":"assistant","timestamp":"2026-10-01T{ts}.000Z","sessionId":"{session}","isSidechain":{side},"requestId":"{req}","parentUuid":null,"message":{{"id":"{id}","model":"claude-x","usage":{{"input_tokens":1000,"output_tokens":5}},"content":{content}}}}}"#
+        )
+    };
+    let write = |path: std::path::PathBuf, lines: Vec<String>| {
+        std::fs::write(path, lines.join("\n") + "\n").unwrap();
+    };
+    write(
+        project.join("s-main.jsonl"),
+        vec![
+            line(
+                "s-main",
+                false,
+                "10:00:00",
+                "m0",
+                "",
+                Some(("Read", "/p/shared.rs")),
+            ),
+            line("s-main", false, "10:06:00", "m1", "", None),
+        ],
+    );
+    write(
+        project.join("s-main/subagents/agent-a.jsonl"),
+        vec![
+            // Copy of the parent's first message under another request id.
+            line("s-main", true, "10:00:00", "m0", "rq-copy", None),
+            line(
+                "s-main",
+                true,
+                "10:02:00",
+                "a1",
+                "",
+                Some(("Read", "/p/only-a.rs")),
+            ),
+            line(
+                "s-main",
+                true,
+                "10:04:00",
+                "a2",
+                "",
+                Some(("Write", "/p/w.rs")),
+            ),
+            line(
+                "s-main",
+                true,
+                "10:04:00",
+                "a3",
+                "",
+                Some(("Read", "/p/shared.rs")),
+            ),
+        ],
+    );
+    write(
+        project.join("s-main/subagents/agent-b.jsonl"),
+        vec![
+            line(
+                "s-main",
+                true,
+                "10:03:00",
+                "b1",
+                "",
+                Some(("Read", "/p/shared.rs")),
+            ),
+            line(
+                "s-main",
+                true,
+                "10:03:00",
+                "b2",
+                "",
+                Some(("Write", "/p/w.rs")),
+            ),
+            line(
+                "s-main",
+                true,
+                "10:05:00",
+                "b3",
+                "",
+                Some(("Read", "/p/only-b.rs")),
+            ),
+        ],
+    );
+    write(
+        project.join("subagents/agent-o.jsonl"),
+        vec![line("s-main", true, "10:02:30", "o1", "", None)],
+    );
+    write(
+        other.join("s-other.jsonl"),
+        vec![
+            line("s-other", false, "10:03:30", "x1", "", None),
+            line("s-other", false, "10:04:30", "x2", "", None),
+        ],
+    );
+    dir
+}
+
+#[test]
+fn subagents_split_direct_delegated_and_unassigned_without_double_counting() {
+    let dir = subagents_config("split");
+    let v = json_of(&dir, &["--subagents", "--summary", "--json"]);
+    let s = &v["sources"][0];
+    let t = &s["subagents"]["totals"];
+    // The totals are the summary's: the copy in agent-a is a replay and counted once.
+    assert_eq!(t["requests"], s["summary"]["requests"]);
+    assert_eq!(t["input"], s["summary"]["input"]);
+    let part = |key: &str, field: &str| t[key][field].as_u64().unwrap();
+    assert_eq!(
+        part("direct", "requests") + part("delegated", "requests") + part("unassigned", "requests"),
+        t["requests"].as_u64().unwrap()
+    );
+    assert_eq!(
+        part("delegated", "requests") + part("unassigned", "requests"),
+        s["summary"]["sub_agent_requests"].as_u64().unwrap()
+    );
+    assert_eq!(
+        part("direct", "requests"),
+        4,
+        "two of s-main, two of s-other"
+    );
+    assert_eq!(part("delegated", "requests"), 6, "three of each agent");
+    assert_eq!(part("unassigned", "requests"), 1);
+    // The agent log outside a session folder has no parent: listed apart, not linked by
+    // project or time although it ran inside the session.
+    let unassigned = s["subagents"]["unassigned"].as_array().unwrap();
+    assert_eq!(unassigned.len(), 1);
+    assert!(unassigned[0]["parent"].is_null() && unassigned[0]["depth"].is_null());
+    let root = &s["subagents"]["roots"][0];
+    assert_eq!(root["session"], "s-main");
+    assert_eq!(root["agents"], 2);
+    assert_eq!(root["children"][0]["parent"], "s-main");
+    assert_eq!(root["children"][0]["parent_basis"], "session_folder");
+    assert_eq!(
+        root["inclusive_input"].as_u64().unwrap(),
+        root["direct"]["input"].as_u64().unwrap() + root["delegated"]["input"].as_u64().unwrap()
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn subagents_overlaps_tell_delegation_from_time_only_and_flag_shared_files() {
+    let dir = subagents_config("overlap");
+    let v = json_of(&dir, &["--subagents", "--tool-calls", "--json"]);
+    let r = &v["sources"][0]["subagents"];
+    assert_eq!(r["file_data"], true);
+    let overlaps = r["overlaps"].as_array().unwrap();
+    let pair = |a: &str, b: &str| {
+        overlaps
+            .iter()
+            .find(|o| {
+                (o["first"] == a && o["second"] == b) || (o["first"] == b && o["second"] == a)
+            })
+            .unwrap_or_else(|| panic!("no overlap of {a} and {b}"))
+    };
+    assert_eq!(pair("s-main", "agent-a")["relation"], "delegation");
+    assert_eq!(pair("agent-a", "agent-b")["relation"], "same_task");
+    // Another chat at the same time is only that: no relation in the logs.
+    assert_eq!(pair("s-main", "s-other")["relation"], "time_only");
+    assert_eq!(pair("s-other", "agent-b")["relation"], "time_only");
+    // Both agents wrote /p/w.rs and read /p/shared.rs while both were running.
+    let both = pair("agent-a", "agent-b");
+    assert_eq!(both["shared_writes"], 1);
+    assert_eq!(both["shared_reads"], 1);
+    assert_eq!(both["examples"][0], "/p/w.rs");
+    // Over the whole session: shared.rs was read by the session and both agents.
+    let root = &r["roots"][0];
+    assert_eq!(root["shared_reads"], 1);
+    assert_eq!(root["shared_writes"], 1);
+    assert_eq!(root["shared_reads_other_ranges"], 0);
+    assert!(r["counts"]["overlaps_time_only"].as_u64().unwrap() >= 2);
+    assert!(
+        r["counterexamples"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|c| c.as_str().unwrap().contains("not a delegation"))
+    );
+    // Only paths, no tool input beyond them.
+    assert!(!serde_json::to_string(r).unwrap().contains("tu-"));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn subagents_without_tool_calls_name_the_missing_data_as_a_limit() {
+    let dir = subagents_config("limit");
+    let v = json_of(&dir, &["--subagents", "--json"]);
+    let r = &v["sources"][0]["subagents"];
+    assert_eq!(r["file_data"], false);
+    assert!(r["roots"][0]["shared_writes"].is_null());
+    assert!(r["overlaps"][0]["shared_writes"].is_null());
+    assert!(
+        r["notes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|n| n.as_str().unwrap().contains("--tool-calls"))
+    );
+    assert!(v["sources"][0].get("tool_calls").is_none());
+    let text = String::from_utf8(run_dir(&dir, &["--subagents", "--tool-calls"]).stdout).unwrap();
+    assert!(text.contains("SUBAGENTS") && text.contains("time only"));
+    assert!(text.contains("The logs hold no run time"));
+    for line in text.lines() {
+        assert!(line.chars().count() <= 88, "{line}");
+    }
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Codex rollouts: a user thread, a child and a grandchild named by spawn records, an agent that
+/// only carries a copy of the parent's history, an agent with no parent information and an
+/// independent thread at the same time.
+fn subagents_codex_home(name: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!(
+        "agentmeter-cli-subcx-{name}-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    let day = dir.join("sessions/2026/10/01");
+    std::fs::create_dir_all(&day).unwrap();
+    let meta = |id: &str, source: &str, thread: &str| {
+        format!(
+            r#"{{"timestamp":"2026-10-01T10:00:00.000Z","type":"session_meta","payload":{{"id":"{id}","cli_version":"0.164.0","cwd":"/work/demo","thread_source":"{thread}","source":{source}}}}}"#
+        )
+    };
+    let tokens = |ts: &str, input: u64| {
+        format!(
+            r#"{{"timestamp":"2026-10-01T{ts}.000Z","type":"event_msg","payload":{{"type":"token_count","info":{{"total_token_usage":{{"input_tokens":{input},"cached_input_tokens":0,"output_tokens":10,"total_tokens":{t}}},"last_token_usage":{{"input_tokens":{input},"cached_input_tokens":0,"output_tokens":10,"total_tokens":{t}}}}}}}}}"#,
+            t = input + 10
+        )
+    };
+    let spawn = |parent: &str| {
+        format!(r#"{{"subagent":{{"thread_spawn":{{"parent_thread_id":"{parent}","depth":1}}}}}}"#)
+    };
+    let write = |id: &str, lines: Vec<String>| {
+        std::fs::write(
+            day.join(format!("rollout-2026-10-01T10-00-00-{id}.jsonl")),
+            lines.join("\n") + "\n",
+        )
+        .unwrap();
+    };
+    write(
+        "cx-r",
+        vec![
+            meta("cx-r", r#""cli""#, "user"),
+            tokens("10:00:10", 1000),
+            tokens("10:10:10", 2000),
+        ],
+    );
+    write(
+        "cx-c",
+        vec![
+            meta("cx-c", &spawn("cx-r"), "subagent"),
+            tokens("10:01:10", 1100),
+            tokens("10:02:10", 1200),
+        ],
+    );
+    write(
+        "cx-g",
+        vec![
+            meta("cx-g", &spawn("cx-c"), "subagent"),
+            tokens("10:01:30", 1300),
+            tokens("10:02:30", 1400),
+        ],
+    );
+    write(
+        "cx-k",
+        vec![
+            meta("cx-k", r#""cli""#, "subagent"),
+            meta("cx-r", r#""cli""#, "user"),
+            tokens("10:06:00", 1500),
+        ],
+    );
+    write(
+        "cx-h",
+        vec![
+            meta("cx-h", r#""cli""#, "subagent"),
+            tokens("10:05:00", 1600),
+        ],
+    );
+    write(
+        "cx-i",
+        vec![meta("cx-i", r#""cli""#, "user"), tokens("10:03:00", 1700)],
+    );
+    dir
+}
+
+#[test]
+fn codex_subagents_follow_spawn_records_through_nested_delegation_and_keep_unknowns() {
+    let dir = subagents_codex_home("nested");
+    let output = Command::new(env!("CARGO_BIN_EXE_agentmeter"))
+        .args([
+            "--tool",
+            "codex",
+            "--subagents",
+            "--summary",
+            "--tool-calls",
+            "--json",
+        ])
+        .env("CLAUDE_CONFIG_DIR", fixtures().join("does-not-exist"))
+        .env("CODEX_HOME", &dir)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let v: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let s = &v["sources"][0];
+    let r = &s["subagents"];
+    assert_eq!(r["totals"]["requests"], s["summary"]["requests"]);
+    assert_eq!(r["counts"]["agents"], 4);
+    assert_eq!(r["counts"]["nested_agents"], 1);
+    assert_eq!(r["counts"]["max_depth"], 2);
+    assert_eq!(r["counts"]["unassigned_agents"], 1);
+    let root = r["roots"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|x| x["session"] == "cx-r")
+        .unwrap();
+    assert_eq!(root["agents"], 3);
+    let child = |id: &str| {
+        root["children"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["agent"] == id)
+            .unwrap()
+    };
+    assert_eq!(
+        (
+            child("cx-c")["depth"].as_u64(),
+            child("cx-c")["parent_basis"].as_str()
+        ),
+        (Some(1), Some("spawn_record"))
+    );
+    assert_eq!(
+        (
+            child("cx-g")["depth"].as_u64(),
+            child("cx-g")["parent"].as_str()
+        ),
+        (Some(2), Some("cx-c"))
+    );
+    // The parent of cx-k is only the history copied into its rollout: named, but weaker.
+    assert_eq!(child("cx-k")["parent_basis"], "copied_history");
+    // cx-h names no parent and stays unassigned; the independent thread has no agents.
+    assert_eq!(r["unassigned"][0]["agent"], "cx-h");
+    assert!(r["unassigned"][0]["parent"].is_null());
+    assert!(
+        r["roots"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|x| x["session"] != "cx-i")
+    );
+    // Codex logs no file targets: shared files are a limit, not zero.
+    assert_eq!(r["file_data"], false);
+    assert!(root["shared_writes"].is_null());
+    assert!(
+        r["notes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|n| n.as_str().unwrap().contains("no file targets"))
+    );
+    let relation = |a: &str, b: &str| {
+        r["overlaps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|o| {
+                (o["first"] == a && o["second"] == b) || (o["first"] == b && o["second"] == a)
+            })
+            .map(|o| o["relation"].clone())
+    };
+    assert_eq!(
+        relation("cx-r", "cx-g"),
+        Some(serde_json::json!("delegation"))
+    );
+    assert_eq!(
+        relation("cx-c", "cx-g"),
+        Some(serde_json::json!("delegation"))
+    );
+    assert_eq!(
+        relation("cx-i", "cx-r"),
+        Some(serde_json::json!("time_only"))
+    );
+    let _ = std::fs::remove_dir_all(dir);
 }
