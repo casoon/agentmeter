@@ -78,3 +78,44 @@ pub struct RawCompacted {
     #[serde(default)]
     pub compaction_response_id: Option<String>,
 }
+
+/// A `response_item` payload, opened only for `--tool-calls`: calls and their outputs by id.
+#[derive(Deserialize)]
+pub struct RawItem {
+    #[serde(rename = "type", default)]
+    pub kind: Option<String>,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub call_id: Option<String>,
+    #[serde(default)]
+    pub output: Option<RawOutput>,
+}
+
+/// An output is text or a list of text parts.
+#[derive(Deserialize)]
+#[serde(untagged)]
+pub enum RawOutput {
+    Text(String),
+    Parts(Vec<RawPart>),
+    Other(IgnoredAny),
+}
+
+#[derive(Deserialize)]
+pub struct RawPart {
+    #[serde(default)]
+    pub text: Option<String>,
+}
+
+impl RawOutput {
+    pub fn text_bytes(&self) -> u64 {
+        match self {
+            RawOutput::Text(t) => t.len() as u64,
+            RawOutput::Parts(p) => p
+                .iter()
+                .map(|p| p.text.as_deref().map_or(0, str::len) as u64)
+                .sum(),
+            RawOutput::Other(_) => 0,
+        }
+    }
+}

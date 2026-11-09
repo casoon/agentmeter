@@ -11,6 +11,7 @@ use agentmeter_core::instructions::{InstructionScan, LoadState};
 use agentmeter_core::model::{Dataset, PROBE_EMPTY_PLACE, Probe};
 use agentmeter_core::report::{ProjectRow, SessionRow, Summary, projects, sessions, summarize};
 use agentmeter_core::time::format_day;
+use agentmeter_core::toolcalls::{ToolAnalysis, ToolData};
 use agentmeter_core::{Compaction, DataQuality, Evaluation, Request, check, evaluate};
 use cli::{Check, Invocation, Options, Since, Tool};
 use render::{Report, Style};
@@ -50,6 +51,8 @@ pub struct Source {
     pub label: &'static str,
     places: Vec<PathBuf>,
     pub dataset: Dataset,
+    /// Tool calls; only read with `--tool-calls`.
+    pub tools: Option<ToolData>,
 }
 
 /// The result of analysing one source; borrowed by [`Report`].
@@ -65,30 +68,38 @@ pub struct Analysis {
     pub probe: Option<Probe>,
     /// What `--instructions` found for this source.
     pub instructions: Option<InstructionScan>,
+    /// What `--tool-calls` found.
+    pub tool_calls: Option<ToolAnalysis>,
 }
 
 pub fn read_sources(tool: Tool) -> Vec<Source> {
+    read_sources_with(tool, false)
+}
+
+pub fn read_sources_with(tool: Tool, tool_calls: bool) -> Vec<Source> {
     let mut sources = Vec::new();
     if matches!(tool, Tool::All | Tool::Claude) {
         let dirs = agentmeter_claude::config_dirs();
         let places = dirs.iter().map(|d| d.join("projects")).collect();
-        let dataset = agentmeter_claude::read(&dirs);
+        let (dataset, tools) = agentmeter_claude::read_with_tools(&dirs, tool_calls);
         sources.push(Source {
             tool: "claude",
             label: "Claude Code",
             places,
             dataset,
+            tools: tool_calls.then_some(tools),
         });
     }
     if matches!(tool, Tool::All | Tool::Codex) {
         let homes = agentmeter_codex::config_dirs();
         let places = homes.iter().map(|h| h.join("sessions")).collect();
-        let dataset = agentmeter_codex::read(&homes);
+        let (dataset, tools) = agentmeter_codex::read_with_tools(&homes, tool_calls);
         sources.push(Source {
             tool: "codex",
             label: "Codex CLI",
             places,
             dataset,
+            tools: tool_calls.then_some(tools),
         });
     }
     // Without an explicit choice, a source that has no logs at all is left out.
@@ -125,6 +136,18 @@ pub fn analyse(source: &Source, options: &Options, now_ms: i64, probe: Option<Pr
             .then(|| evaluate(dataset, since_ms, probe.as_ref())),
         probe,
         instructions: None,
+        tool_calls: source
+            .tools
+            .as_ref()
+            .filter(|_| options.tool_calls)
+            .map(|t| {
+                agentmeter_core::toolcalls::evaluate(
+                    t,
+                    &dataset.files,
+                    &dataset.compactions,
+                    since_ms,
+                )
+            }),
     }
 }
 
@@ -225,12 +248,12 @@ fn run(options: &Options, interactive: bool) -> ExitCode {
         }
         other => other,
     };
-    let mut sources = read_sources(options.tool);
+    let mut sources = read_sources_with(options.tool, options.tool_calls);
     // A file scan needs no logs: the sources are the agents asked for.
     if instructions_dir.is_some() && options.tool == Tool::All {
-        sources = read_sources(Tool::Claude)
+        sources = read_sources_with(Tool::Claude, options.tool_calls)
             .into_iter()
-            .chain(read_sources(Tool::Codex))
+            .chain(read_sources_with(Tool::Codex, options.tool_calls))
             .collect();
     }
     if instructions_dir.is_none()
@@ -267,6 +290,9 @@ fn run(options: &Options, interactive: bool) -> ExitCode {
             // projects.
             if let Some(name) = &options.project {
                 s.dataset.retain_project(name);
+                if let Some(t) = s.tools.as_mut() {
+                    t.retain_project(name);
+                }
             }
             let probe = (options.probe && s.tool == "claude")
                 .then(|| run_probe(s, since_ms, io::stderr().is_terminal(), instructions_dir));
@@ -304,6 +330,7 @@ fn run(options: &Options, interactive: bool) -> ExitCode {
             findings: a.findings.as_ref(),
             probe: a.probe.as_ref(),
             instructions: a.instructions.as_ref(),
+            tool_calls: a.tool_calls.as_ref(),
         })
         .collect();
     if options.json {

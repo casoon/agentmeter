@@ -280,6 +280,7 @@ fn documented_json_fields_equal_the_real_ones() {
             "--projects",
             "--findings",
             "--probe",
+            "--tool-calls",
             "--instructions",
             fixtures().join("instr/claude/repo").to_str().unwrap(),
         ],
@@ -288,7 +289,7 @@ fn documented_json_fields_equal_the_real_ones() {
     assert_eq!(v["schema_version"], 1);
     let documented = documented_fields();
     assert!(
-        documented.len() == 21,
+        documented.len() == 24,
         "the doc lists the objects: {documented:?}"
     );
     for (path, fields) in &documented {
@@ -528,4 +529,121 @@ fn instructions_codex_follows_its_own_rules_and_a_bad_directory_exits_two() {
             .code(),
         Some(2)
     );
+}
+
+/// A generated Claude log with repeats, a failing command, a huge result and secrets that must
+/// never reach the report.
+fn tool_call_config(name: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!(
+        "agentmeter-cli-tools-{name}-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    let project = dir.join("projects/-Users-me-GitHub-demo");
+    std::fs::create_dir_all(&project).unwrap();
+    let mut lines = Vec::new();
+    let mut n = 0u32;
+    let mut call = |name: &str, input: &str, text: &str, err: bool| {
+        n += 1;
+        lines.push(format!(
+            r#"{{"type":"assistant","timestamp":"2026-10-01T10:{n:02}:00.000Z","sessionId":"s1","message":{{"id":"m{n}","model":"claude-x","usage":{{"input_tokens":10,"output_tokens":5}},"content":[{{"type":"tool_use","id":"t{n}","name":"{name}","input":{input}}}]}}}}"#
+        ));
+        lines.push(format!(
+            r#"{{"type":"user","timestamp":"2026-10-01T10:{n:02}:30.000Z","sessionId":"s1","message":{{"role":"user","content":[{{"type":"tool_result","tool_use_id":"t{n}","content":"{text}","is_error":{err}}}]}}}}"#
+        ));
+    };
+    for _ in 0..7 {
+        call("Read", r#"{"file_path":"/p/a.rs"}"#, "x", false);
+    }
+    for _ in 0..4 {
+        call(
+            "Bash",
+            r#"{"command":"cargo test --secret-flag-xyz"}"#,
+            "SECRET-OUTPUT-TEXT",
+            true,
+        );
+    }
+    call(
+        "Bash",
+        r#"{"command":"ls -R /"}"#,
+        &"y".repeat(150_000),
+        false,
+    );
+    std::fs::write(project.join("s1.jsonl"), lines.join("\n") + "\n").unwrap();
+    dir
+}
+
+fn run_dir(config: &std::path::Path, args: &[&str]) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_agentmeter"))
+        .args(args)
+        .env("CLAUDE_CONFIG_DIR", config)
+        .env("CODEX_HOME", fixtures().join("does-not-exist"))
+        .env_remove("NO_COLOR")
+        .output()
+        .unwrap()
+}
+
+#[test]
+fn tool_calls_json_has_three_rules_with_evidence_and_no_content() {
+    let dir = tool_call_config("json");
+    let output = run_dir(&dir, &["--tool-calls", "--json"]);
+    assert!(output.status.success());
+    let raw = String::from_utf8(output.stdout).unwrap();
+    // Neither the command nor the output text may appear anywhere.
+    for secret in [
+        "secret-flag-xyz",
+        "SECRET-OUTPUT-TEXT",
+        "cargo test",
+        "ls -R",
+    ] {
+        assert!(!raw.contains(secret), "{secret} leaked");
+    }
+    let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    let tools = &v["sources"][0]["tool_calls"];
+    assert_eq!(tools["calls"], 12);
+    let rules = tools["rules"].as_array().unwrap();
+    let ids: Vec<&str> = rules.iter().map(|r| r["id"].as_str().unwrap()).collect();
+    assert_eq!(ids, ["repeat-read", "repeat-failure", "large-output"]);
+    for rule in rules {
+        assert_eq!(rule["status"], "observed");
+        assert_eq!(rule["calibrated"], false);
+        assert!(rule["from"].is_string() && rule["next_step"].is_string());
+        assert!(!rule["counterexamples"].as_array().unwrap().is_empty());
+        assert!(!rule["evidence"].as_array().unwrap().is_empty());
+    }
+    assert!(
+        rules[1]["examples"][0]["label"]
+            .as_str()
+            .unwrap()
+            .starts_with("Bash #")
+    );
+    // The default mode has no such key.
+    let output = run_dir(&dir, &["--summary", "--json"]);
+    let v: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(v["sources"][0].get("tool_calls").is_none());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn tool_calls_text_fits_and_codex_marks_rules_not_measurable() {
+    let dir = tool_call_config("text");
+    let output = run_dir(&dir, &["--tool-calls"]);
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        text.contains("TOOL CALLS") && text.contains("repeat-read") && text.contains("not counted")
+    );
+    assert!(!text.contains("SECRET-OUTPUT-TEXT") && !text.contains("secret-flag-xyz"));
+    for line in text.lines() {
+        assert!(line.chars().count() <= 88, "{line}");
+    }
+    let _ = std::fs::remove_dir_all(dir);
+    let output = run_both(
+        "does-not-exist",
+        "codex-basic",
+        &["--tool", "codex", "--tool-calls", "--json"],
+    );
+    let v: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let rules = v["sources"][0]["tool_calls"]["rules"].as_array().unwrap();
+    assert_eq!(rules[0]["status"], "not_measurable");
+    assert_eq!(rules[1]["status"], "not_measurable");
 }

@@ -18,7 +18,8 @@ mod raw;
 
 use agentmeter_core::model::{Compaction, Dataset, ReadStats, Request, SessionStart};
 use agentmeter_core::time::parse_iso_ms;
-use raw::{RawCompacted, RawEvent, RawLine, RawMeta, RawTokens, RawTurnContext};
+use agentmeter_core::toolcalls::{ToolData, ToolEvent, ToolKind, ToolStats, ToolStatus};
+use raw::{RawCompacted, RawEvent, RawItem, RawLine, RawMeta, RawTokens, RawTurnContext};
 use ruzstd::decoding::{FrameDecoder, StreamingDecoder};
 use std::collections::HashSet;
 use std::ffi::{OsStr, OsString};
@@ -106,7 +107,17 @@ pub fn config_dirs() -> Vec<PathBuf> {
 /// Reads the rollout directories of every Codex home. Missing directories are skipped; the
 /// caller can tell from `stats.files` and `stats.compressed_files_unreadable`.
 pub fn read(homes: &[PathBuf]) -> Dataset {
-    let mut reader = Reader::default();
+    read_with_tools(homes, false).0
+}
+
+/// Like [`read`]; with `tools` also the tool calls (`--tool-calls`): name, id and the size of
+/// the output. Codex logs the arguments of its current tools as free-form scripts, so no file or
+/// command is read from them and no call is judged failed or successful.
+pub fn read_with_tools(homes: &[PathBuf], tools: bool) -> (Dataset, ToolData) {
+    let mut reader = Reader {
+        collect_tools: tools,
+        ..Reader::default()
+    };
     for home in homes {
         let mut files = Vec::new();
         for name in ROLLOUT_DIRS {
@@ -126,7 +137,8 @@ pub fn read(homes: &[PathBuf]) -> Dataset {
             }
         }
     }
-    reader.finish()
+    let tool_data = reader.tool_data();
+    (reader.finish(), tool_data)
 }
 
 fn is_compressed(path: &Path) -> bool {
@@ -222,6 +234,11 @@ struct Reader {
     /// Events already counted from another file (a sub-agent rollout replays its parent).
     seen_events: HashSet<(String, u64, u64, u64)>,
     seen_compactions: HashSet<String>,
+    collect_tools: bool,
+    calls: std::collections::HashMap<String, ToolEvent>,
+    outputs: std::collections::HashMap<String, Option<u64>>,
+    tool_seq: u64,
+    tool_duplicates: u64,
 }
 
 impl Reader {
@@ -302,6 +319,9 @@ impl Reader {
                     }
                 }
                 Some("compacted") => self.compacted(&line, source, &facts),
+                Some("response_item") if self.collect_tools => {
+                    self.tool_item(&line, source, &facts);
+                }
                 Some(kind) if KNOWN_TYPES.contains(&kind) => {}
                 Some(kind) => *self.stats.unknown_types.entry(kind.to_owned()).or_default() += 1,
                 None => {
@@ -330,6 +350,88 @@ impl Reader {
                 entrypoint: facts.entrypoint.take(),
                 cwd: facts.cwd.take(),
             });
+        }
+    }
+
+    /// A call or an output of a `response_item`, by call id; nothing else is read.
+    fn tool_item(&mut self, line: &RawLine, source: usize, facts: &FileFacts) {
+        let Some(item) = payload::<RawItem>(line) else {
+            return;
+        };
+        let Some(id) = item.call_id.clone().filter(|id| !id.is_empty()) else {
+            return;
+        };
+        match item.kind.as_deref() {
+            Some("function_call" | "custom_tool_call") => {
+                let Some(time_ms) = line.timestamp.as_deref().and_then(parse_iso_ms) else {
+                    return;
+                };
+                self.tool_seq += 1;
+                let event = ToolEvent {
+                    source,
+                    session: facts.session.clone(),
+                    project: facts.project.clone(),
+                    sub: facts.sub,
+                    seq: self.tool_seq,
+                    time_ms,
+                    call_id: id.clone(),
+                    tool: item.name.unwrap_or_else(|| "(unnamed)".to_owned()),
+                    kind: ToolKind::Other,
+                    target: None,
+                    range: None,
+                    fingerprint: None,
+                    status: ToolStatus::Unknown,
+                    output_bytes: None,
+                    has_result: false,
+                };
+                match self.calls.get(&id) {
+                    Some(known) => {
+                        // A sub-agent rollout replays its parent: the parent's copy wins.
+                        self.tool_duplicates += 1;
+                        if known.sub && !event.sub {
+                            self.calls.insert(id, event);
+                        }
+                    }
+                    None => {
+                        self.calls.insert(id, event);
+                    }
+                }
+            }
+            Some("function_call_output" | "custom_tool_call_output") => {
+                let bytes = item.output.as_ref().map(raw::RawOutput::text_bytes);
+                self.outputs.entry(id).or_insert(bytes);
+            }
+            _ => {}
+        }
+    }
+
+    fn tool_data(&self) -> ToolData {
+        let mut stats = ToolStats {
+            duplicates_merged: self.tool_duplicates,
+            ..ToolStats::default()
+        };
+        let mut events: Vec<ToolEvent> = self.calls.values().cloned().collect();
+        for e in &mut events {
+            if let Some(bytes) = self.outputs.get(&e.call_id) {
+                e.output_bytes = *bytes;
+                e.has_result = true;
+            }
+            *stats.tools.entry(e.tool.clone()).or_default() += 1;
+        }
+        stats.results_without_call = self
+            .outputs
+            .keys()
+            .filter(|id| !self.calls.contains_key(*id))
+            .count() as u64;
+        stats.calls = events.len() as u64;
+        stats.calls_without_result = events.iter().filter(|e| !e.has_result).count() as u64;
+        events.sort_by_key(|e| (e.time_ms, e.source, e.seq));
+        ToolData {
+            events,
+            stats,
+            has_targets: false,
+            has_status: false,
+            has_sizes: true,
         }
     }
 

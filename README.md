@@ -108,6 +108,7 @@ agentmeter --sessions          # sessions by input
 agentmeter --projects          # projects by input
 agentmeter --findings          # rules with conclusion, measure, evidence and next step
 agentmeter --probe             # also ask Claude Code what a session start holds (see below)
+agentmeter --tool-calls        # also read tool calls: repeated reads/failures, large outputs (see below)
 agentmeter --instructions .  # the instruction files that apply to a directory (see below)
 agentmeter --tool codex        # claude, codex or all (default)
 agentmeter --since 7d          # 7d, 30d or a date such as 2026-10-01
@@ -137,6 +138,26 @@ today's configuration, not the one the period ran with, and it measures the comm
 `claude`: the report names the front end that wrote the sessions, since a desktop app or IDE adds
 instructions and tools of its own.
 
+## Tool calls: `--tool-calls`
+
+The default mode reads usage metadata only. `--tool-calls` is an explicit extension: it also opens
+the message content for tool calls and their results and reports three rules, each with period,
+sample, counter-examples, evidence and a next step:
+
+- `repeat-read`: the same file and line range read again with no observed edit of that file and no
+  compaction in between. Other line ranges are separate areas.
+- `repeat-failure`: an identical failed call repeated with no observed edit in the session
+  between the attempts (a retest after a fix does not count).
+- `large-output`: single results of 100,000 bytes or more.
+
+What is kept: call ids, tool names, file paths of file tools, a hash of what makes other calls
+identical (a command is shown as `Bash #a1b2c3d4`, never as text) and the byte size of results.
+No command text and no output text is stored or printed. Edits made by commands are not observed,
+so the rules name that uncertainty; limits are uncalibrated; bytes are not tokens, and the tokens
+of a request are not attributed to one tool. Calls without a result stay unknown, not successful.
+Codex logs its tool arguments as scripts, so only `large-output` is measurable there; the other
+rules say "not measurable". Details: [Findings](docs/reference/findings.md).
+
 ## Instruction files: `--instructions <dir>`
 
 Shows which instruction files apply to one directory, where each comes from, how large it is and
@@ -162,7 +183,7 @@ scan the worktree to see its files. Rules in [Findings](docs/reference/findings.
 
 ## Privacy
 
-Read-only, no network, no telemetry; `--probe` is the one exception that starts another program
+Read-only, no network, no telemetry; `--tool-calls` opens message content for call ids, paths, command fingerprints and result sizes (see above); `--probe` is the one exception that starts another program
 (`claude`, see above). The log files contain prompt and tool text, so they are
 read in full, but agentmeter extracts only usage metadata (token counts, timestamps, model,
 session and project ids, compaction events). Prompt and tool text is not analysed, stored or

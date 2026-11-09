@@ -53,6 +53,22 @@ counter-examples and one concrete next step to check. JSON output has the same f
 | `long-session` | Info | Sessions that span more than 24 hours. Wall-clock time says little about cost; a long pause costs nothing. |
 | `config-size` | Hint | Size and count of instruction files, skills, hooks and MCP servers, only when you ask for the configuration check. |
 
+## Tool-call rules
+
+Only with `--tool-calls`. Each observation carries the period, the sample, counter-examples that
+look like the pattern but are not counted, evidence (log file and call id, never text), what the
+rule cannot know and one step to check. Limits are uncalibrated. Output is bytes; request tokens
+are not attributed to a tool.
+
+| Id | Measures |
+| --- | --- |
+| `repeat-read` | Reads of the same file and line range as an earlier read in the same log file, from 5 on, with no observed edit of that file and no compaction between. An edit made by a command is not observed, so a re-read can still have been justified. |
+| `repeat-failure` | A failed call repeated unchanged (same tool and parameters, commands compared as hashes), from 3 on, with no observed edit anywhere in the session between the attempts. |
+| `large-output` | Single tool results of 100,000 bytes or more, by tool, with their share of all returned bytes. |
+
+Claude Code logs the file, the command and whether a call failed; Codex logs scripts, so there only
+`large-output` is measured and the other two are "not measurable".
+
 ## Instruction-file rules
 
 Only with `--instructions <dir>`, from today's files rather than the logs. Each finding names

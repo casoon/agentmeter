@@ -236,6 +236,7 @@ fn detail(id: &str, views: &[View], period: &str, style: Style) -> String {
                 findings: a.findings.as_ref().filter(|_| id.starts_with("rule:")),
                 probe: a.probe.as_ref().filter(|_| id.starts_with("rule:")),
                 instructions: None,
+                tool_calls: None,
             };
             render::text(&report, style)
         })
@@ -386,6 +387,7 @@ mod tests {
             label,
             places: Vec::new(),
             dataset,
+            tools: None,
         }
     }
 
