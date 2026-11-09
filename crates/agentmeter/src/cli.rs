@@ -59,6 +59,8 @@ pub struct Options {
     pub tool_calls: bool,
     /// Timeline of starts, resumes, compactions and pauses.
     pub transitions: bool,
+    /// Compare the last N days with the N days before them.
+    pub compare: Option<i64>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -100,6 +102,19 @@ where
             "--json" => options.json = true,
             "--tool-calls" => options.tool_calls = true,
             "--transitions" => options.transitions = true,
+            "--compare" => match args.next() {
+                Some(value) => match parse_since(&value) {
+                    Some(Since::Days(days)) if days.checked_mul(2 * DAY_MS).is_some() => {
+                        options.compare = Some(days)
+                    }
+                    _ => {
+                        return Invocation::Error(format!(
+                            "`{value}` is not a period length; use a day count like 7d"
+                        ));
+                    }
+                },
+                None => return Invocation::Error("--compare needs a period like 7d".to_owned()),
+            },
             "--probe" => {
                 options.probe = true;
                 options.findings = true;
@@ -148,12 +163,18 @@ where
             "--probe asks Claude Code; it does not apply to codex".to_owned(),
         );
     }
+    if options.compare.is_some() && options.since.is_some() {
+        return Invocation::Error(
+            "--compare sets both periods itself; it does not combine with --since".to_owned(),
+        );
+    }
     if !(options.sessions
         || options.projects
         || options.findings
         || options.instructions.is_some()
         || options.tool_calls
-        || options.transitions)
+        || options.transitions
+        || options.compare.is_some())
     {
         options.summary = true;
     }
@@ -199,6 +220,12 @@ Options:
                          with the context around each; with --tool-calls also the areas read
                          again right after a compaction. Metadata only; a pause or a new chat
                          is a marker, never a verdict.
+      --compare <Nd>     The last N days next to the N days before them: requests per active day,
+                         input per request, cache share, compactions, median start context,
+                         sub-agent share and cache rebuilds, each with both values, change and
+                         denominators. Windows with too few days or requests get no change;
+                         model and front-end shifts are named. Shows changes, never causes.
+                         Does not combine with --since; --project and --tool apply.
       --json             Print JSON instead of text (schema: docs/reference/json.md)
       --check <name>     data-quality: exit 1 if a source has unreadable data or none to
                          analyse, 0 otherwise, 2 for a bad call. Findings never fail it.
@@ -300,6 +327,30 @@ mod tests {
             panic!("expected a run");
         };
         assert!(options.transitions && !options.summary && !options.tool_calls);
+    }
+
+    #[test]
+    fn compare_takes_a_day_count_and_stands_alone() {
+        let Invocation::Run(options) = run(&["--compare", "7d"]) else {
+            panic!("expected a run");
+        };
+        assert_eq!(options.compare, Some(7));
+        assert!(!options.summary);
+        for bad in [
+            &["--compare"][..],
+            &["--compare", "2026-10-01"],
+            &["--compare", "0d"],
+        ] {
+            assert!(matches!(run(bad), Invocation::Error(_)), "{bad:?}");
+        }
+        assert!(matches!(
+            run(&["--compare", "7d", "--since", "7d"]),
+            Invocation::Error(_)
+        ));
+        let Invocation::Run(options) = run(&[]) else {
+            panic!("expected a run");
+        };
+        assert_eq!(options.compare, None);
     }
 
     #[test]

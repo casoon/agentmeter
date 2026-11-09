@@ -76,6 +76,7 @@ pub struct Report<'a> {
     pub instructions: Option<&'a InstructionScan>,
     pub tool_calls: Option<&'a ToolAnalysis>,
     pub transitions: Option<&'a agentmeter_core::transitions::TransitionReport>,
+    pub compare: Option<&'a agentmeter_core::compare::Comparison>,
 }
 
 /// Widest the text gets, also in a wider terminal or a pipe; bars are at most [`BAR`] cells.
@@ -198,6 +199,9 @@ pub fn text(report: &Report, style: Style) -> String {
     if let Some(findings) = report.findings {
         out += &findings_text(findings, report.probe, style);
     }
+    if let Some(c) = report.compare {
+        out += &compare_text(c, style);
+    }
     if let Some(t) = report.transitions {
         out += &transitions_text(t, style);
     }
@@ -228,6 +232,90 @@ fn duration(ms: i64) -> String {
 /// Context size: the log's number, or the word for not recorded.
 fn ctx_or_unknown(value: Option<u64>) -> String {
     value.map_or("unknown".to_owned(), tokens)
+}
+
+fn compare_value(name: &str, value: Option<f64>) -> String {
+    match (name, value) {
+        (_, None) => "unknown".to_owned(),
+        ("cache_read_pct" | "sub_agent_pct", Some(v)) => format!("{v:.1} %"),
+        ("median_start_context" | "input_per_request", Some(v)) => tokens(v.round() as u64),
+        (_, Some(v)) if v.fract() == 0.0 => count(v as u64),
+        (_, Some(v)) => format!("{v:.1}"),
+    }
+}
+
+fn compare_text(c: &agentmeter_core::compare::Comparison, style: Style) -> String {
+    let mut out = heading(style, "COMPARISON");
+    out += &wrap(style, c.method, "  method     ", "             ", 13);
+    for (name, w) in [("earlier", &c.earlier), ("later  ", &c.later)] {
+        out += &wrap(
+            style,
+            &format!(
+                "{} to {} · {} requests · {} of {} days with logs, {} without",
+                &w.from[..10],
+                &w.to[..10],
+                count(w.requests),
+                count(w.active_days),
+                count(w.days),
+                count(w.days_without_logs)
+            ),
+            &format!("  {name}    "),
+            "             ",
+            13,
+        );
+    }
+    out += "\n";
+    out += &style.dim(&format!(
+        "  {:<30} {:>9} {:>9} {:>9} {:>8}\n",
+        "Metric", "Earlier", "Later", "Change", "Rel."
+    ));
+    for m in &c.metrics {
+        let change = match (m.change, m.change_pct) {
+            (Some(x), _) if m.unit == "%" => format!("{x:+.1} pp"),
+            (Some(x), _) => format!("{x:+.1}"),
+            (None, _) => "-".to_owned(),
+        };
+        let rel = m
+            .change_pct
+            .map_or("-".to_owned(), |x| format!("{x:+.0} %"));
+        out += &format!(
+            "  {:<30} {:>9} {:>9} {:>9} {:>8}\n",
+            m.name.replace('_', " "),
+            compare_value(m.name, m.earlier),
+            compare_value(m.name, m.later),
+            change,
+            rel
+        );
+        out += &style.dim(&format!(
+            "    per {} · {} / {}\n",
+            m.denominator_unit,
+            count(m.denominator_earlier),
+            count(m.denominator_later)
+        ));
+        if let Some(n) = &m.note {
+            out += &wrap(style, &format!("not measured: {n}"), "      ", "      ", 6);
+        }
+    }
+    if c.verdict != "compared" {
+        out += "\n";
+        out += &wrap(
+            style,
+            "no change is stated: a window is empty or too small",
+            "  note  ",
+            "        ",
+            8,
+        );
+    }
+    for l in &c.limitations {
+        out += &wrap(
+            style,
+            &format!("{}: {}", l.kind, l.text),
+            "  limit ",
+            "        ",
+            8,
+        );
+    }
+    out
 }
 
 fn transitions_text(r: &agentmeter_core::transitions::TransitionReport, style: Style) -> String {
@@ -1420,6 +1508,9 @@ fn json_source(report: &Report) -> Value {
     }
     if let Some(v) = report.transitions {
         put("transitions", json!(v));
+    }
+    if let Some(v) = report.compare {
+        put("compare", json!(v));
     }
     if let Some(v) = report.findings {
         put("verdict", json!(v.verdict));

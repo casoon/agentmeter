@@ -108,6 +108,7 @@ agentmeter --sessions          # sessions by input
 agentmeter --projects          # projects by input
 agentmeter --findings          # rules with conclusion, measure, evidence and next step
 agentmeter --probe             # also ask Claude Code what a session start holds (see below)
+agentmeter --compare 7d         # the last 7 days next to the 7 days before (see below)
 agentmeter --transitions        # starts, resumes, compactions, pauses as a timeline (see below)
 agentmeter --tool-calls        # also read tool calls: repeated reads/failures, large outputs (see below)
 agentmeter --instructions .  # the instruction files that apply to a directory (see below)
@@ -149,6 +150,18 @@ where the log does; sessions are never linked by time, and a pause or a new chat
 a loss of context. With `--tool-calls` each compaction also counts the areas read again in the
 next 30 calls that were read before it and not edited since, and a project hint appears when this
 repeats; consumption after a transition is measured, not proven avoidable.
+
+## Comparing periods: `--compare <Nd>`
+
+Puts the last N days next to the N days before them, from the same logs and with the same rules
+as the other views. Each figure shows both values, the absolute and relative change and what it
+was divided by: requests per active day, input per request, cache share, compactions per 1,000
+requests, median start context with its sample, sub-agent share and cache rebuilds. Days without
+logs are counted and figures are per active day or per request, not per calendar day. A window
+with fewer than 3 active days or 100 requests is shown without a change, and a shift in the models
+or front ends between the windows is listed as a limitation. A figure the logs cannot give stays
+unknown. A change is shown, not explained, and less or more input is not better or worse work.
+`--project` and `--tool` apply; `--since` does not combine with it.
 
 ## Tool calls: `--tool-calls`
 

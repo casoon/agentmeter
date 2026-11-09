@@ -35,6 +35,7 @@ list under it names every field of that object. The tests compare these lists wi
 - `rules` — only with `--findings`: the status of every rule, once each.
 - `probe` — only with `--probe` and only for `claude`: what Claude Code's `/context` reported.
 - `transitions` — only with `--transitions`: starts, resumes and forks, compactions and pauses with the context around them.
+- `compare` — only with `--compare`: two periods side by side with change and denominators.
 - `tool_calls` — only with `--tool-calls`: repeated reads, repeated failures and large outputs, from tool calls and results.
 - `instructions` — only with `--instructions <dir>`: the instruction files that apply to that directory for this agent.
 
@@ -252,6 +253,65 @@ measured, not proven avoidable. The compactions are the events the summary count
 - `then_log_ends` — compaction only: no later compaction in this file, so the count runs to the end of the log.
 - `parent` — resume or fork only: `id` of the session the log names and `in_logs` (that session's log was read); otherwise `null`.
 - `repeats` — compaction only, with `--tool-calls`: `window` (in words), `calls_checked`, `reads`, `reread_areas` (reads of a file and line range read before the compaction and not edited since), `failures_repeated` (identical failed calls repeated) and `examples` (up to three files); otherwise `null`. A count of what happened, not proof the re-read was avoidable.
+
+### `sources[].compare`
+
+The last N days (`later`) against the N days before them (`earlier`), from the same logs and the
+same rules. A change is shown, never explained: it is no verdict on the quality of the work and no
+proof of a cause.
+
+- `verdict` — `compared`, `not_reliable` (a window has too few active days or requests: values, no change) or `no_data` (a window holds no request).
+- `method` — how the figures are made, in words.
+- `earlier` — the window before.
+- `later` — the window up to now.
+- `metrics` — the figures, in a fixed order.
+- `limitations` — what limits the comparison.
+
+### `sources[].compare.earlier`
+
+- `from` — start of the window, included.
+- `to` — end of the window, excluded.
+- `days` — UTC calendar days the window touches; the first and last may be partial.
+- `active_days` — days with at least one request.
+- `days_without_logs` — `days` minus `active_days`.
+- `requests` — requests in the window.
+- `input` — input tokens in the window.
+- `compactions` — compactions in the window.
+- `reliable` — at least 3 active days and 100 requests (uncalibrated).
+- `models` — requests per model, most first: `label`, `count`, `share_pct`.
+- `entrypoints` — main-conversation sessions per front end, most first: `label`, `count`, `share_pct`; `(not recorded)` where the log has none.
+
+### `sources[].compare.later`
+
+- `from` — start of the window, included.
+- `to` — end of the window, excluded.
+- `days` — UTC calendar days the window touches; the first and last may be partial.
+- `active_days` — days with at least one request.
+- `days_without_logs` — `days` minus `active_days`.
+- `requests` — requests in the window.
+- `input` — input tokens in the window.
+- `compactions` — compactions in the window.
+- `reliable` — at least 3 active days and 100 requests (uncalibrated).
+- `models` — as in `earlier`.
+- `entrypoints` — as in `earlier`.
+
+### `sources[].compare.metrics[]`
+
+- `name` — `active_days`, `requests_per_active_day`, `input_per_request`, `cache_read_pct`, `compactions_per_1000_requests`, `median_start_context` (`baseline-load` of the window), `sub_agent_pct` or `cache_rebuilds` (`cache-rebuild` of the window).
+- `unit` — unit of the values; `%` for shares.
+- `earlier` — value in the earlier window, or `null` when it cannot be computed (zero denominator, rule not measurable); never zero as a guess.
+- `later` — value in the later window, or `null`.
+- `change` — `later` minus `earlier`, in percentage points for `%`; `null` unless both values exist and both windows are reliable.
+- `change_pct` — relative change in percent; `null` as `change`, and when `earlier` is zero.
+- `denominator_earlier` — what the earlier value was divided by or sampled from.
+- `denominator_later` — the same for the later value.
+- `denominator_unit` — what the denominators count.
+- `note` — why a value is missing where a rule could not measure it, otherwise `null`.
+
+### `sources[].compare.limitations[]`
+
+- `kind` — `empty-window`, `window-not-reliable`, `model-mix` or `entrypoint-mix` (a model's or front end's share moved by 10 percentage points or more).
+- `text` — the limitation in words.
 
 ### `sources[].tool_calls`
 

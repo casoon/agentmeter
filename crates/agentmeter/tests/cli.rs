@@ -282,6 +282,8 @@ fn documented_json_fields_equal_the_real_ones() {
             "--probe",
             "--tool-calls",
             "--transitions",
+            "--compare",
+            "7d",
             "--instructions",
             fixtures().join("instr/claude/repo").to_str().unwrap(),
         ],
@@ -290,7 +292,7 @@ fn documented_json_fields_equal_the_real_ones() {
     assert_eq!(v["schema_version"], 1);
     let documented = documented_fields();
     assert!(
-        documented.len() == 28,
+        documented.len() == 33,
         "the doc lists the objects: {documented:?}"
     );
     for (path, fields) in &documented {
@@ -790,4 +792,105 @@ fn codex_transitions_leave_unknown_sizes_unknown() {
         .unwrap();
     let c = all.iter().find(|x| x["kind"] == "compaction").unwrap();
     assert!(c["context_after"].is_null());
+}
+
+/// Two windows of 7 days relative to now: 4 days of 30 requests on one model before, 4 days of
+/// 60 requests on another one in the last week.
+fn compare_config(name: &str) -> std::path::PathBuf {
+    use agentmeter_core::time::{DAY_MS, format_iso};
+    let dir = std::env::temp_dir().join(format!(
+        "agentmeter-cli-compare-{name}-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    let project = dir.join("projects/-Users-me-GitHub-demo");
+    std::fs::create_dir_all(&project).unwrap();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64;
+    let mut lines = Vec::new();
+    for (days, per_day, model, cached) in [
+        (&[8i64, 9, 10, 11][..], 30i64, "claude-old", 500),
+        (&[1, 2, 3, 4][..], 60, "claude-new", 800),
+    ] {
+        for days_ago in days {
+            for i in 0..per_day {
+                let ts = format_iso(now - days_ago * DAY_MS - i * 1000);
+                lines.push(format!(
+                    r#"{{"type":"assistant","timestamp":"{ts}","sessionId":"s{days_ago}","message":{{"id":"m{days_ago}-{i}","model":"{model}","usage":{{"input_tokens":{},"cache_read_input_tokens":{cached},"output_tokens":5}},"content":[]}}}}"#,
+                    1000 - cached
+                ));
+            }
+        }
+    }
+    std::fs::write(project.join("s.jsonl"), lines.join("\n") + "\n").unwrap();
+    dir
+}
+
+#[test]
+fn compare_json_gives_both_values_changes_and_denominators() {
+    let dir = compare_config("json");
+    let v = json_of(&dir, &["--compare", "7d", "--json"]);
+    let c = &v["sources"][0]["compare"];
+    assert_eq!(c["verdict"], "compared");
+    assert_eq!(c["earlier"]["requests"], 120);
+    assert_eq!(c["later"]["requests"], 240);
+    assert_eq!(c["later"]["active_days"], 4);
+    let metric = |name: &str| {
+        c["metrics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|m| m["name"] == name)
+            .unwrap()
+    };
+    let m = metric("requests_per_active_day");
+    assert_eq!(
+        (m["earlier"].as_f64(), m["later"].as_f64()),
+        (Some(30.0), Some(60.0))
+    );
+    assert_eq!(m["change_pct"], 100.0);
+    assert_eq!(m["denominator_earlier"], 4);
+    let m = metric("cache_read_pct");
+    assert_eq!(m["change"], 30.0);
+    assert_eq!(m["denominator_later"], 240_000);
+    // Not measurable here: unknown, not zero.
+    assert!(metric("median_start_context")["later"].is_null());
+    // The model changed completely: named as a limitation, no cause given.
+    let kinds: Vec<&str> = c["limitations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|l| l["kind"].as_str().unwrap())
+        .collect();
+    assert!(kinds.contains(&"model-mix"), "{kinds:?}");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn compare_is_opt_in_and_text_fits() {
+    let dir = compare_config("text");
+    let plain = json_of(&dir, &["--json"]);
+    assert!(plain["sources"][0].get("compare").is_none());
+    let text = String::from_utf8(run_dir(&dir, &["--compare", "7d"]).stdout).unwrap();
+    assert!(text.contains("COMPARISON") && text.contains("requests per active day"));
+    assert!(text.contains("model-mix"));
+    for line in text.lines() {
+        assert!(line.chars().count() <= 88, "{line}");
+    }
+    let bad = run_dir(&dir, &["--compare", "7d", "--since", "7d"]);
+    assert_eq!(bad.status.code(), Some(2));
+    // A window with no logs gives values as unknown and no change.
+    let v = json_of(&dir, &["--compare", "1d", "--json"]);
+    let c = &v["sources"][0]["compare"];
+    assert_eq!(c["verdict"], "no_data");
+    assert!(
+        c["metrics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|m| m["change"].is_null())
+    );
+    let _ = std::fs::remove_dir_all(dir);
 }

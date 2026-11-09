@@ -65,6 +65,16 @@ compaction are compared with what the same log did before: re-read areas (file a
 not edited since) and repeated identical failed calls are counted, with the compaction as
 evidence. That count is not an avoidable amount.
 
+## Comparison
+
+`--compare <Nd>` is a view, not a rule. It runs the existing analysis over two windows (the last
+N days and the N days before) and shows both values, the change and the denominators, including
+`baseline-load` and `cache-rebuild` as each window measures them; where a rule cannot measure a
+window the figure is unknown, not zero. A window below 3 active days or 100 requests (uncalibrated)
+gets no change. A shift of 10 percentage points or more in the share of a model or front end
+(`entrypoint`) between the windows is named as a limitation. A change is a correlation with
+whatever else changed in that time; it says nothing about cause or about the quality of the work.
+
 ## Tool-call rules
 
 Only with `--tool-calls`. Each observation carries the period, the sample, counter-examples that
