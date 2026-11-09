@@ -14,6 +14,7 @@
 //! verdict on quality and no proof of a cause.
 
 use crate::findings::{Evaluation, evaluate};
+use crate::gaps::{GAP_NOTE, Gaps, gaps};
 use crate::model::{Compaction, Dataset, Request};
 use crate::report::summarize;
 use crate::time::{DAY_MS, format_iso};
@@ -57,6 +58,10 @@ pub struct WindowFacts {
     /// Days with at least one request.
     pub active_days: u64,
     pub days_without_logs: u64,
+    /// Days without requests between the window's first and last day with requests; `None` when
+    /// the window has no request or the capture predates this field.
+    #[serde(default)]
+    pub gaps: Option<Gaps>,
     pub requests: u64,
     pub input: u64,
     pub compactions: u64,
@@ -88,7 +93,7 @@ pub struct Metric {
 }
 
 /// Something that limits what the comparison says. `kind`: `window-not-reliable`,
-/// `empty-window`, `model-mix` or `entrypoint-mix`.
+/// `empty-window`, `gaps`, `model-mix` or `entrypoint-mix`.
 #[derive(Debug, Clone, Serialize)]
 pub struct Limitation {
     pub kind: &'static str,
@@ -283,6 +288,7 @@ pub(crate) fn side(dataset: &Dataset, window: Window) -> Side {
             days,
             active_days,
             days_without_logs: days.saturating_sub(active_days),
+            gaps: gaps(requests.iter().map(|r| r.time_ms)),
             requests: n,
             input: summary.input,
             compactions: summary.compactions.total,
@@ -339,6 +345,17 @@ fn mix_shift(
             moved.join(", ")
         ),
     })
+}
+
+fn describe_gaps(name: &str, facts: &WindowFacts) -> Option<String> {
+    let gaps = facts.gaps.as_ref().filter(|g| g.gap_days > 0)?;
+    let longest = gaps.longest_gap.as_ref()?;
+    Some(format!(
+        "the {name} window has {} days without requests between {} and {} (longest {} days, {} to \
+         {}); {GAP_NOTE} The values are per active day, so a gap does not lower them, but they \
+         rest on fewer days",
+        gaps.gap_days, gaps.first_day, gaps.last_day, longest.days, longest.from, longest.to
+    ))
 }
 
 fn describe(name: &str, facts: &WindowFacts) -> String {
@@ -417,6 +434,11 @@ pub(crate) fn compare_sides(a: Side, b: Side) -> Comparison {
                 kind: "window-not-reliable",
                 text: describe(name, facts),
             });
+        }
+    }
+    for (name, facts) in [("earlier", &a.facts), ("later", &b.facts)] {
+        if let Some(text) = describe_gaps(name, facts) {
+            limitations.push(Limitation { kind: "gaps", text });
         }
     }
     if a.facts.requests > 0 && b.facts.requests > 0 {

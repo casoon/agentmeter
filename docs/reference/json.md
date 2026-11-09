@@ -42,12 +42,14 @@ list under it names every field of that object. The tests compare these lists wi
 - `tool_calls` — only with `--tool-calls`: repeated reads, repeated failures and large outputs, from tool calls and results.
 - `instructions` — only with `--instructions <dir>`: the instruction files that apply to that directory for this agent.
 - `skills` — only with `--skills`: installed skills called and not observed in the period, with the size of their entries in the session-start skill list.
+- `retention` — only with `--retention`: how long the agent keeps transcripts (Claude Code `cleanupPeriodDays`) and whether the oldest request is close to it.
 
 ### `sources[].data_quality`
 
 - `observed_from` — time of the first request in the logs, or `null`.
 - `observed_to` — time of the last request in the logs, or `null`.
 - `requests` — requests after merging duplicates, over the whole logs (not limited by `--since`).
+- `gaps` — days without requests between the first and the last day with requests, over the whole logs; `null` when there is no request. Not an error: a pause and missing logs look the same, the report claims neither.
 - `analysable` — `false` when there is no usage at all; then "no findings" would be misleading.
 - `files` — log files read.
 - `lines` — non-empty lines read.
@@ -69,6 +71,19 @@ list under it names every field of that object. The tests compare these lists wi
 - `placeholder_version_entries` — entries with the placeholder version `0.0.0`.
 - `first_version` — lowest agent version seen, or `null`.
 - `last_version` — highest agent version seen, or `null`.
+
+### `sources[].data_quality.gaps`
+
+UTC calendar days from the first to the last day with a request. The days before the first and
+after the last request are not part of it. `--check data-quality` does not look at it.
+
+- `first_day` — the first day with a request.
+- `last_day` — the last day with a request.
+- `span_days` — days from `first_day` to `last_day`, both included.
+- `active_days` — days in the span with at least one request.
+- `gap_days` — days in the span without a request (`span_days` minus `active_days`); `0` with a `null` `longest_gap` and an empty `periods` when there is none, and also for a single day.
+- `longest_gap` — the longest run of such days as `from`, `to` (both included) and `days`, the first one if several are equally long; `null` without gap.
+- `periods` — every run of gap days in time order, each as `from`, `to` and `days`.
 
 ### `sources[].summary`
 
@@ -278,6 +293,7 @@ proof of a cause.
 - `days` — UTC calendar days the window touches; the first and last may be partial.
 - `active_days` — days with at least one request.
 - `days_without_logs` — `days` minus `active_days`.
+- `gaps` — days without requests between the window's first and last day with requests, as in `sources[].data_quality.gaps`; `null` when the window has no request (and in captures made before the field existed).
 - `requests` — requests in the window.
 - `input` — input tokens in the window.
 - `compactions` — compactions in the window.
@@ -292,6 +308,7 @@ proof of a cause.
 - `days` — UTC calendar days the window touches; the first and last may be partial.
 - `active_days` — days with at least one request.
 - `days_without_logs` — `days` minus `active_days`.
+- `gaps` — as in `earlier`.
 - `requests` — requests in the window.
 - `input` — input tokens in the window.
 - `compactions` — compactions in the window.
@@ -314,7 +331,7 @@ proof of a cause.
 
 ### `sources[].compare.limitations[]`
 
-- `kind` — `empty-window`, `window-not-reliable`, `model-mix` or `entrypoint-mix` (a model's or front end's share moved by 10 percentage points or more).
+- `kind` — `empty-window`, `window-not-reliable`, `gaps` (a window has days without requests inside it; named with count and longest run, without saying pause or loss), `model-mix` or `entrypoint-mix` (a model's or front end's share moved by 10 percentage points or more).
 - `text` — the limitation in words.
 
 ### `sources[].subagents`
@@ -713,6 +730,46 @@ equated. Codex logs no skill calls: its `status` is `not_measurable` and nothing
 - `place` — the probe run used (`empty directory`).
 - `probe_tokens` — tokens of the category `Skills` in `/context`, as Claude Code estimates them (`< 20` style cells are read as their limit).
 - `scanned_est_tokens` — estimated tokens of the listed user and plugin skills the scan found. The two cover different sets (the probe also counts built-in and claude.ai skills) and are shown side by side, not reconciled.
+
+### `sources[].retention`
+
+Only with `--retention`; the settings files are read only then. Claude Code only: for Codex the
+object has `measurable` `false` and the reason in `note`, everything else empty or `null`. Codex
+CLI has no setting that deletes session files by age (checked 2026-11: `history.max_bytes` caps
+`history.jsonl`, not the session logs), so its retention is not measurable.
+
+- `measurable` — `false` when the source has no such setting.
+- `key` — the setting, `cleanupPeriodDays`.
+- `reference` — where the key is documented and from when: Claude Code settings reference as checked in 2026-11 (whole number of days, at least 1, default 30, valid in any settings file; the documentation names no version for it).
+- `default_days` — the documented default, `30`; `null` when not measurable.
+- `files` — every settings file looked at, with its state.
+- `values` — the `cleanupPeriodDays` entries found.
+- `projects_not_read` — projects whose working directory is unknown or gone, so their project and local settings were not looked at (unknown, not absent).
+- `effective_days` — the retention the oldest request is compared with: the shortest value found, else the default; `null` when a value is unusable or the source has none. Managed settings and command-line settings are not read and take precedence.
+- `basis` — `settings` or `default`; `null` where `effective_days` is.
+- `note` — how `effective_days` came about, or why it is unknown.
+- `hint` — only when the oldest request is at least 90 % of the retention old (and not more than one day past it, uncalibrated), otherwise `null`: the early start of the logs may be a deletion by Claude Code. A hint, not proof.
+
+### `sources[].retention.files[]`
+
+- `path` — the file.
+- `scope` — `user`, `project` or `local`.
+- `project` — project name for `project` and `local`, else `null`.
+- `state` — `read`, `missing`, `unreadable` or `invalid_json`.
+
+#### `sources[].retention.values[]`
+
+- `file`, `scope`, `project` — as in `files[]`.
+- `days` — as written; `null` when it is not a whole number of at least 1 (Claude Code rejects it).
+
+#### `sources[].retention.hint`
+
+- `oldest_entry` — time of the oldest request.
+- `age_days` — its age in days at the time of the run (the measured value).
+- `retention_days` — the retention it is compared with (the denominator).
+- `age_of_retention_pct` — `age_days` as a share of `retention_days`.
+- `certainty` — `medium` when every settings file could be read and every project's directory was found, otherwise `low`; never higher, since logs also start for other reasons (first use of the tool, another machine).
+- `text` — the hint in words.
 
 ## `--check data-quality`
 

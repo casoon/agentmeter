@@ -9,6 +9,7 @@
 use agentmeter_core::compaction::{
     Settings, SettingsFile, SwitchSetting, WindowSetting, window_value,
 };
+use agentmeter_core::gaps::{Retention, RetentionValue};
 use agentmeter_core::model::Dataset;
 use std::collections::HashMap;
 use std::fs;
@@ -75,6 +76,85 @@ pub fn read(config_dirs: &[PathBuf], dataset: &Dataset) -> Settings {
         }
     }
     settings
+}
+
+/// `--retention`: the `cleanupPeriodDays` key of the same files, compared with the oldest
+/// request. Only that key is looked at; managed settings are not read.
+pub fn retention(config_dirs: &[PathBuf], dataset: &Dataset, now_ms: i64) -> Retention {
+    let mut files = Vec::new();
+    let mut values = Vec::new();
+    for dir in config_dirs {
+        read_retention_file(
+            &mut files,
+            &mut values,
+            &dir.join("settings.json"),
+            "user",
+            None,
+        );
+    }
+    let dirs = project_dirs(dataset);
+    let projects: std::collections::BTreeSet<&str> = dataset
+        .requests
+        .iter()
+        .filter(|r| !r.sub)
+        .map(|r| r.project.as_str())
+        .collect();
+    let projects_not_read = projects
+        .into_iter()
+        .filter(|p| !dirs.iter().any(|(d, _)| d == p))
+        .map(str::to_owned)
+        .collect();
+    for (project, dir) in dirs {
+        for (name, scope) in [
+            ("settings.json", "project"),
+            ("settings.local.json", "local"),
+        ] {
+            read_retention_file(
+                &mut files,
+                &mut values,
+                &dir.join(".claude").join(name),
+                scope,
+                Some(&project),
+            );
+        }
+    }
+    let oldest = dataset.requests.iter().map(|r| r.time_ms).min();
+    agentmeter_core::gaps::retention(files, values, projects_not_read, oldest, now_ms)
+}
+
+fn read_retention_file(
+    files: &mut Vec<SettingsFile>,
+    values: &mut Vec<RetentionValue>,
+    path: &Path,
+    scope: &'static str,
+    project: Option<&str>,
+) {
+    let file = path.display().to_string();
+    let mut state = |state: &'static str| {
+        files.push(SettingsFile {
+            path: file.clone(),
+            scope,
+            project: project.map(str::to_owned),
+            state,
+        });
+    };
+    let text = match fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return state("missing"),
+        Err(_) => return state("unreadable"),
+    };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return state("invalid_json");
+    };
+    state("read");
+    if let Some(v) = value.get("cleanupPeriodDays") {
+        values.push(RetentionValue {
+            file,
+            scope,
+            project: project.map(str::to_owned),
+            days: v.as_u64().filter(|d| *d >= 1),
+        });
+    }
 }
 
 fn read_file(settings: &mut Settings, path: &Path, scope: &'static str, project: Option<&str>) {
@@ -174,7 +254,7 @@ mod tests {
             cwd: Some(proj.display().to_string()),
             parent: None,
         });
-        let s = read(&[cfg], &dataset);
+        let s = read(std::slice::from_ref(&cfg), &dataset);
         let state = |suffix: &str| {
             s.files
                 .iter()
@@ -191,6 +271,16 @@ mod tests {
         assert_eq!(s.windows[1].tokens, None);
         assert!(!s.auto_compact_enabled[0].enabled);
         assert!(s.projects_not_read.is_empty());
+
+        // Retention: no key gives the default; an unusable key gives none; a key is used.
+        let r = retention(std::slice::from_ref(&cfg), &dataset, 40 * 86_400_000);
+        assert_eq!(r.effective_days, Some(30));
+        fs::write(cfg.join("settings.json"), r#"{"cleanupPeriodDays":0}"#).unwrap();
+        let r = retention(std::slice::from_ref(&cfg), &dataset, 40 * 86_400_000);
+        assert_eq!((r.effective_days, r.values.len()), (None, 1));
+        fs::write(cfg.join("settings.json"), r#"{"cleanupPeriodDays":45}"#).unwrap();
+        let r = retention(&[cfg], &dataset, 40 * 86_400_000);
+        assert_eq!((r.effective_days, r.basis), (Some(45), Some("settings")));
         let _ = fs::remove_dir_all(root);
     }
 }

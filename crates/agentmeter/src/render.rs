@@ -81,6 +81,7 @@ pub struct Report<'a> {
     pub skills: Option<&'a agentmeter_core::skills::SkillAnalysis>,
     pub compaction_causes: Option<&'a agentmeter_core::compaction::CausesReport>,
     pub before_after: Option<&'a agentmeter_core::before_after::BeforeAfter>,
+    pub retention: Option<&'a agentmeter_core::gaps::Retention>,
 }
 
 /// Widest the text gets, also in a wider terminal or a pipe; bars are at most [`BAR`] cells.
@@ -1906,6 +1907,26 @@ fn read_text(report: &Report, style: Style) -> String {
         }
         _ => out += &line(&bad, "observed", "no requests with usage".to_owned()),
     }
+    // A period without gaps shows nothing.
+    if let Some(gaps) = quality.gaps.as_ref().filter(|g| g.gap_days > 0) {
+        let longest = gaps.longest_gap.as_ref().map_or(String::new(), |l| {
+            format!(" · longest {} days ({} – {})", l.days, l.from, l.to)
+        });
+        out += &line(
+            &note,
+            "gaps",
+            format!(
+                "{} of {} days between the first and the last request have none, in {} runs{longest}. {}",
+                count(gaps.gap_days),
+                count(gaps.span_days),
+                count(gaps.periods.len() as u64),
+                agentmeter_core::gaps::GAP_NOTE
+            ),
+        );
+    }
+    if let Some(r) = report.retention {
+        out += &retention_text(r, &line, &ok, &note);
+    }
 
     // Problems lose data; limits leave something unmeasured; info only says what was done.
     let mut problems = Vec::new();
@@ -2047,6 +2068,61 @@ fn read_text(report: &Report, style: Style) -> String {
     out
 }
 
+/// The `--retention` lines of the READ block.
+fn retention_text(
+    r: &agentmeter_core::gaps::Retention,
+    line: &dyn Fn(&str, &str, String) -> String,
+    ok: &str,
+    note: &str,
+) -> String {
+    let mut out = String::new();
+    if !r.measurable {
+        return line(note, "retention", r.note.clone());
+    }
+    match (r.effective_days, r.basis) {
+        (Some(days), Some(basis)) => {
+            out += &line(
+                ok,
+                "retention",
+                format!("{} {days} days ({basis}); {}", r.key, r.note),
+            )
+        }
+        _ => out += &line(note, "retention", r.note.clone()),
+    }
+    for f in r
+        .files
+        .iter()
+        .filter(|f| !matches!(f.state, "read" | "missing"))
+    {
+        out += &line(
+            note,
+            "retention",
+            format!("{} ({} settings): {}", f.path, f.scope, f.state),
+        );
+    }
+    for v in r.values.iter().filter(|v| v.days.is_none()) {
+        out += &line(
+            note,
+            "retention",
+            format!("{} ({} settings): value not usable", v.file, v.scope),
+        );
+    }
+    if !r.projects_not_read.is_empty() {
+        out += &line(
+            note,
+            "retention",
+            format!(
+                "working directory unknown or gone for {}: their project and local settings were not looked at",
+                r.projects_not_read.join(", ")
+            ),
+        );
+    }
+    if let Some(h) = &r.hint {
+        out += &line(note, "retention", h.text.clone());
+    }
+    out
+}
+
 fn list(map: &std::collections::BTreeMap<String, u64>) -> String {
     map.iter()
         .map(|(name, n)| format!("{name} ({})", count(*n)))
@@ -2144,6 +2220,9 @@ fn json_source(report: &Report) -> Value {
     }
     if let Some(v) = report.before_after {
         put("before_after", json!(v));
+    }
+    if let Some(v) = report.retention {
+        put("retention", json!(v));
     }
     if let Some(v) = report.findings {
         put("verdict", json!(v.verdict));

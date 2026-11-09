@@ -71,6 +71,9 @@ pub struct Options {
     pub compaction_causes: bool,
     /// Also read today's auto-compact settings files; implies `compaction_causes`.
     pub compaction_settings: bool,
+    /// Also read the transcript retention (`cleanupPeriodDays`) from the Claude Code settings
+    /// files and compare it with the oldest request; implies nothing else.
+    pub retention: bool,
     /// Compare the period before a user-given change date with the one after it (00:00 UTC, ms).
     pub changed_on: Option<i64>,
     /// The user's name for that change.
@@ -148,6 +151,7 @@ where
                 options.compaction_settings = true;
                 options.compaction_causes = true;
             }
+            "--retention" => options.retention = true,
             "--changed-on" => match args.next() {
                 Some(value) => match parse_date_ms(&value) {
                     Some(ms) => options.changed_on = Some(ms),
@@ -347,6 +351,13 @@ Options:
                          and compare them with the sizes. Reads those files only; the setting
                          is today's, never assigned to compactions of the past. Implies
                          --compaction-causes.
+      --retention        Also read how long Claude Code keeps transcripts (cleanupPeriodDays,
+                         default 30 days) from the settings files of the user and of each
+                         project's working directory, and compare it with the age of the oldest
+                         request: close to it, earlier logs may have been deleted (a hint, not
+                         proof). Reads those files only; Codex has no such setting (not
+                         measurable). Gaps between the first and last day with requests are
+                         always shown, without saying whether they are pauses or missing logs.
       --changed-on <date>
                          The period before a change next to the period since it, of equal
                          length: the same figures as --compare. The date (like 2026-10-01) is

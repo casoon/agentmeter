@@ -287,6 +287,7 @@ fn documented_json_fields_equal_the_real_ones() {
             "--subagents",
             "--skills",
             "--compaction-settings",
+            "--retention",
             "--changed-on",
             "2026-10-01",
             "--change-label",
@@ -299,7 +300,7 @@ fn documented_json_fields_equal_the_real_ones() {
     assert_eq!(v["schema_version"], 1);
     let documented = documented_fields();
     assert!(
-        documented.len() == 57,
+        documented.len() == 60,
         "the doc lists the objects: {documented:?}"
     );
     for (path, fields) in &documented {
@@ -1800,4 +1801,163 @@ fn captures_are_made_listed_compared_and_deleted_on_request_only() {
             .success()
     );
     let _ = std::fs::remove_dir_all(dir);
+}
+
+/// One request per listed day, `days_ago` days before now, and optionally a user settings file.
+fn gap_config(name: &str, days_ago: &[i64], settings: Option<&str>) -> std::path::PathBuf {
+    use agentmeter_core::time::{DAY_MS, format_iso};
+    let dir =
+        std::env::temp_dir().join(format!("agentmeter-cli-gaps-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let project = dir.join("projects/-Users-me-GitHub-demo");
+    std::fs::create_dir_all(&project).unwrap();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64;
+    let lines: Vec<String> = days_ago
+        .iter()
+        .map(|d| {
+            let ts = format_iso(now - d * DAY_MS);
+            format!(
+                r#"{{"type":"assistant","timestamp":"{ts}","sessionId":"s{d}","message":{{"id":"m{d}","model":"claude-x","usage":{{"input_tokens":1000,"output_tokens":5}},"content":[]}}}}"#
+            )
+        })
+        .collect();
+    std::fs::write(project.join("s.jsonl"), lines.join("\n") + "\n").unwrap();
+    if let Some(text) = settings {
+        std::fs::write(dir.join("settings.json"), text).unwrap();
+    }
+    dir
+}
+
+fn has_line_starting(text: &str, start: &str) -> bool {
+    text.lines().any(|l| l.trim_start().starts_with(start))
+}
+
+#[test]
+fn gaps_are_counted_with_longest_run_and_never_called_a_loss() {
+    // Days 1, 2, 5, 9, 10 ago: runs of 2 and 3 days without requests between them.
+    let dir = gap_config("some", &[10, 9, 5, 2, 1], None);
+    let v = json_of(&dir, &["--json"]);
+    let g = &v["sources"][0]["data_quality"]["gaps"];
+    assert_eq!(g["span_days"], 10);
+    assert_eq!(g["active_days"], 5);
+    assert_eq!(g["gap_days"], 5);
+    assert_eq!(g["longest_gap"]["days"], 3);
+    assert_eq!(g["periods"].as_array().unwrap().len(), 2);
+    let text = String::from_utf8(run_dir(&dir, &[]).stdout).unwrap();
+    assert!(has_line_starting(&text, "! gaps"), "{text}");
+    assert!(text.contains("the logs do not say which"));
+    assert!(!text.contains("lost") && !text.contains("deleted"));
+    for line in text.lines() {
+        assert!(line.chars().count() <= 88, "{line}");
+    }
+    // No new failure condition.
+    assert!(run_dir(&dir, &["--check", "data-quality"]).status.success());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn a_period_without_gaps_or_with_one_day_shows_no_hint() {
+    for (name, days) in [("none", &[3i64, 2, 1][..]), ("one", &[2][..])] {
+        let dir = gap_config(name, days, None);
+        let v = json_of(&dir, &["--json"]);
+        let g = &v["sources"][0]["data_quality"]["gaps"];
+        assert_eq!(g["gap_days"], 0, "{name}");
+        assert!(g["longest_gap"].is_null());
+        assert_eq!(g["periods"].as_array().unwrap().len(), 0);
+        assert_eq!(g["span_days"].as_u64().unwrap(), days.len() as u64);
+        let text = String::from_utf8(run_dir(&dir, &[]).stdout).unwrap();
+        assert!(!has_line_starting(&text, "! gaps"), "{text}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}
+
+#[test]
+fn compare_names_gaps_inside_a_window_as_a_limitation() {
+    let dir = compare_config("gaps");
+    let v = json_of(&dir, &["--compare", "12d", "--json"]);
+    let c = &v["sources"][0]["compare"];
+    assert_eq!(c["later"]["gaps"]["gap_days"], 3);
+    assert!(c["earlier"]["gaps"].is_null());
+    let limit = c["limitations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|l| l["kind"] == "gaps")
+        .expect("a gaps limitation");
+    let text = limit["text"].as_str().unwrap();
+    assert!(text.contains("3 days without requests") && text.contains("not say which"));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn retention_is_read_only_on_request_and_compared_as_a_hint() {
+    // The oldest request is 9 days old; the user's setting keeps transcripts for 10.
+    let dir = gap_config("ret", &[9, 8, 1], Some(r#"{"cleanupPeriodDays":10}"#));
+    let without = json_of(&dir, &["--json"]);
+    assert!(without["sources"][0].get("retention").is_none());
+    let v = json_of(&dir, &["--retention", "--json"]);
+    let r = &v["sources"][0]["retention"];
+    assert_eq!(r["measurable"], true);
+    assert_eq!(r["key"], "cleanupPeriodDays");
+    assert_eq!(r["effective_days"], 10);
+    assert_eq!(r["basis"], "settings");
+    assert_eq!(r["values"][0]["days"], 10);
+    assert_eq!(r["hint"]["retention_days"], 10);
+    assert!(r["hint"]["age_days"].as_f64().unwrap() >= 9.0);
+    assert!(r["hint"]["certainty"].is_string());
+    assert!(
+        r["hint"]["text"]
+            .as_str()
+            .unwrap()
+            .contains("hint, not proof")
+    );
+    let text = String::from_utf8(run_dir(&dir, &["--retention"]).stdout).unwrap();
+    assert!(
+        text.contains("cleanupPeriodDays 10 days (settings)"),
+        "{text}"
+    );
+    for line in text.lines() {
+        assert!(line.chars().count() <= 88, "{line}");
+    }
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn retention_without_setting_uses_the_documented_default_and_unreadable_files_stay_visible() {
+    // Young logs and the default of 30 days: no hint.
+    let dir = gap_config("ret-default", &[5, 1], None);
+    let r = json_of(&dir, &["--retention", "--json"])["sources"][0]["retention"].clone();
+    assert_eq!(r["effective_days"], 30);
+    assert_eq!(r["basis"], "default");
+    assert!(r["hint"].is_null());
+    let _ = std::fs::remove_dir_all(dir);
+    // A broken file: the default is still the best statement, but the certainty drops.
+    let dir = gap_config("ret-broken", &[29, 1], Some("{ nope"));
+    let r = json_of(&dir, &["--retention", "--json"])["sources"][0]["retention"].clone();
+    assert_eq!(r["files"][0]["state"], "invalid_json");
+    assert_eq!(r["hint"]["certainty"], "low");
+    let _ = std::fs::remove_dir_all(dir);
+    // A value Claude Code rejects: the retention is unknown, never a guess.
+    let dir = gap_config("ret-zero", &[29, 1], Some(r#"{"cleanupPeriodDays":0}"#));
+    let r = json_of(&dir, &["--retention", "--json"])["sources"][0]["retention"].clone();
+    assert!(r["effective_days"].is_null() && r["hint"].is_null());
+    assert!(r["values"][0]["days"].is_null());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn codex_retention_is_not_measurable() {
+    let output = run_both(
+        "does-not-exist",
+        "codex-cache-write",
+        &["--tool", "codex", "--retention", "--json"],
+    );
+    let v: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let r = &v["sources"][0]["retention"];
+    assert_eq!(r["measurable"], false);
+    assert!(r["effective_days"].is_null() && r["hint"].is_null());
+    assert!(r["note"].as_str().unwrap().contains("not measurable"));
 }

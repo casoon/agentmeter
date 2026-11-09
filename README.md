@@ -115,6 +115,7 @@ agentmeter --transitions        # starts, resumes, compactions, pauses as a time
 agentmeter --subagents         # direct vs delegated usage, overlapping runs, shared files (see below)
 agentmeter --compaction-causes  # compactions by project, model, session; hints at the lever (see below)
 agentmeter --compaction-settings # also compare today's autoCompactWindow with them (reads settings files)
+agentmeter --retention         # also read cleanupPeriodDays and compare it with the oldest request (see below)
 agentmeter --tool-calls        # also read tool calls: repeated reads/failures, large outputs (see below)
 agentmeter --instructions .  # the instruction files that apply to a directory (see below)
 agentmeter --skills            # skills called and not observed, with their share of the skill list (see below)
@@ -205,6 +206,19 @@ directory. Without this flag no file outside the logs is read. The value is toda
 assigned to compactions of the past; a window that does not show in the observed sizes is a
 hint, not proof. Managed settings, the environment variable and the command-line flag are not
 visible and take precedence.
+
+## Gaps and retention
+
+The READ block names days without requests between the first and the last day with requests of a
+source (count, longest run, periods); no gap, no line. A gap can be a pause or missing logs and is
+reported as neither; `--check data-quality` ignores it. `--compare`, `--changed-on` and captures
+list the gaps inside each period as a limitation.
+
+`--retention` also reads `cleanupPeriodDays` (default 30 days, any Claude Code settings file; as
+documented in 2026-11, no version stated) from the same settings files as `--compaction-settings`
+and compares it with the age of the oldest request. Close to the retention, the report says
+earlier logs may have been deleted, with measured age, retention and certainty: a hint, not proof.
+Codex has no such setting (not measurable). Without the flag no settings file is read.
 
 ## Before and after a change: `--changed-on <date>`
 

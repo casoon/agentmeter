@@ -112,6 +112,27 @@ models or front ends, and short periods, move the numbers too, and less or more 
 better or worse work. Today's `--probe` values are not part of it and are never read as an earlier
 configuration; nothing is stored, so no earlier configuration can be recovered from this view.
 
+## Gaps and retention
+
+The data quality always lists days without requests between the first and the last day with
+requests of a source: how many, the longest run and the periods. A period without such days shows
+nothing. Such a day can be a pause or missing logs; the report says neither, and
+`--check data-quality` has no threshold for it. `--compare`, `--changed-on` and captures name the
+gaps inside each window as a limitation (kind `gaps`); their per-active-day values are not lowered
+by a gap, but they rest on fewer days.
+
+`--retention` also reads `cleanupPeriodDays` from the Claude Code settings files (user, project and
+local, as for `--compaction-settings`): a whole number of days, at least 1, default 30, valid in
+any settings file (Claude Code settings reference as checked in 2026-11; the documentation names no
+version for it). Without a value in a file the default is used, with the note that managed and
+command-line settings were not read. The oldest request is compared with it: at 90 % of the
+retention or more (and at most a day past it; uncalibrated) the report says earlier logs may have
+been deleted, with the measured age, the retention it was divided by and a certainty (`medium` if
+every file was readable and every project directory found, else `low`). It is a hint, not proof:
+logs also start when the tool was first used. Codex CLI has no setting that deletes session files
+by age (`history.max_bytes` only caps `history.jsonl`), so its retention is not measurable. Nothing
+is read without the flag and no setting is changed.
+
 ## Captures
 
 `--capture <name> --since <period>` stores the `--compare` figures of one source and period in a

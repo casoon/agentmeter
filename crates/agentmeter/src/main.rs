@@ -83,6 +83,8 @@ pub struct Analysis {
     pub compaction_causes: Option<agentmeter_core::compaction::CausesReport>,
     /// What `--changed-on` found.
     pub before_after: Option<agentmeter_core::before_after::BeforeAfter>,
+    /// What `--retention` found.
+    pub retention: Option<agentmeter_core::gaps::Retention>,
 }
 
 pub fn read_sources(tool: Tool) -> Vec<Source> {
@@ -153,6 +155,18 @@ pub fn analyse(source: &Source, options: &Options, now_ms: i64, probe: Option<Pr
             let (earlier, later) = agentmeter_core::compare::windows_before(now_ms, days);
             agentmeter_core::compare::compare(dataset, earlier, later)
         }),
+        retention: options.retention.then(|| {
+            // The settings files are read only when asked for, and only for Claude Code.
+            if source.tool == "claude" {
+                agentmeter_claude::settings::retention(
+                    &agentmeter_claude::config_dirs(),
+                    dataset,
+                    now_ms,
+                )
+            } else {
+                agentmeter_core::gaps::not_measurable(CODEX_RETENTION_REASON)
+            }
+        }),
         before_after: options.changed_on.map(|change_ms| {
             agentmeter_core::before_after::before_after(
                 dataset,
@@ -198,6 +212,11 @@ pub fn analyse(source: &Source, options: &Options, now_ms: i64, probe: Option<Pr
             }),
     }
 }
+
+/// Why Codex has no retention to read.
+const CODEX_RETENTION_REASON: &str = "not measurable: Codex CLI has no setting that deletes its \
+     session files by age (config.toml only caps history.jsonl with history.max_bytes, which is not \
+     the session log); nothing is read";
 
 /// Place name of the directory given to `--instructions` in a probe.
 pub const PROBE_INSTRUCTIONS_PLACE: &str = "instructions directory";
@@ -401,6 +420,7 @@ fn run(options: &Options, interactive: bool) -> ExitCode {
             skills: a.skills.as_ref(),
             compaction_causes: a.compaction_causes.as_ref(),
             before_after: a.before_after.as_ref(),
+            retention: a.retention.as_ref(),
         })
         .collect();
     if options.json {

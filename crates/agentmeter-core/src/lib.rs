@@ -10,6 +10,7 @@ pub mod compaction;
 pub mod compare;
 pub mod findings;
 pub mod format;
+pub mod gaps;
 pub mod instructions;
 pub mod model;
 pub mod report;
