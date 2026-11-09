@@ -21,7 +21,7 @@ description = "Diagnosis for coding-agent usage: findings with tips from local s
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
-runemark = { version = "0.9.1", features = ["select"] }
+runemark = { version = "0.10", features = ["select"] }
 ruzstd = { version = "0.9.1", default-features = false, features = ["std"] }
 agentmeter-core = { version = "0.1.1", path = "crates/agentmeter-core" }
 agentmeter-codex = { version = "0.1.1", path = "crates/agentmeter-codex" }
