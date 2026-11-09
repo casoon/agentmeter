@@ -961,3 +961,146 @@ fn changed_on_compares_equal_periods_and_never_names_a_cause() {
     );
     let _ = std::fs::remove_dir_all(dir);
 }
+
+fn capture_run(config: &std::path::Path, store: &std::path::Path, args: &[&str]) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_agentmeter"))
+        .args(args)
+        .env("CLAUDE_CONFIG_DIR", config)
+        .env("CODEX_HOME", fixtures().join("does-not-exist"))
+        .env("AGENTMETER_DATA_DIR", store)
+        .env_remove("NO_COLOR")
+        .output()
+        .unwrap()
+}
+
+#[test]
+fn captures_are_made_listed_compared_and_deleted_on_request_only() {
+    let dir = compare_config("capture");
+    let store = dir.join("data");
+    let json = |args: &[&str]| -> serde_json::Value {
+        let out = capture_run(&dir, &store, args);
+        assert!(
+            out.status.success(),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        serde_json::from_slice(&out.stdout).unwrap()
+    };
+    // Nothing is stored unless asked for.
+    json(&["--json"]);
+    assert!(!store.exists());
+    assert_eq!(
+        json(&["--captures", "--json"])["captures"]
+            .as_array()
+            .unwrap()
+            .len(),
+        0
+    );
+
+    let old = json(&[
+        "--capture",
+        "old",
+        "--since",
+        "12d",
+        "--change-label",
+        "before",
+        "--json",
+    ]);
+    json(&["--capture", "new", "--since", "6d", "--json"]);
+    assert_eq!(old["schema_version"], 1);
+    assert_eq!(old["facts"]["requests"], 360);
+    // Numbers only: the file holds no text of the logs.
+    let text = std::fs::read_to_string(store.join("captures/old.json")).unwrap();
+    assert!(
+        !text.contains("s8") && !text.contains("m8-0"),
+        "no session or message ids"
+    );
+    let doc = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/reference/json.md"),
+    )
+    .unwrap();
+    for key in old.as_object().unwrap().keys() {
+        assert!(doc.contains(&format!("`{key}`")), "{key} is documented");
+    }
+    // Never overwritten, never without a period.
+    assert!(
+        !capture_run(&dir, &store, &["--capture", "old", "--since", "6d"])
+            .status
+            .success()
+    );
+    assert_eq!(
+        capture_run(&dir, &store, &["--capture", "x"]).status.code(),
+        Some(2)
+    );
+
+    let list = json(&["--captures", "--json"]);
+    let names: Vec<&str> = list["captures"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["new", "old"]);
+
+    let v = json(&["--compare-captures", "old", "new", "--json"]);
+    let c = &v["capture_comparison"];
+    assert_eq!(c["comparable"], true);
+    assert_eq!(c["earlier"]["label"], "before");
+    assert_eq!(c["comparison"]["earlier"]["requests"], 360);
+    assert_eq!(c["comparison"]["later"]["requests"], 240);
+    let kinds: Vec<&str> = c["comparison"]["limitations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|l| l["kind"].as_str().unwrap())
+        .collect();
+    assert!(kinds.contains(&"windows-overlap"), "{kinds:?}");
+    let text =
+        String::from_utf8(capture_run(&dir, &store, &["--compare-captures", "old", "new"]).stdout)
+            .unwrap();
+    assert!(text.contains("CAPTURE COMPARISON") && text.contains("requests per active day"));
+
+    // A rule version from another release: not comparable, with the reason, no figures.
+    let path = store.join("captures/new.json");
+    let edited = std::fs::read_to_string(&path)
+        .unwrap()
+        .replace("\"baseline-load\": 1", "\"baseline-load\": 9");
+    std::fs::write(&path, edited).unwrap();
+    let c = json(&["--compare-captures", "old", "new", "--json"]);
+    assert_eq!(c["capture_comparison"]["comparable"], false);
+    assert!(c["capture_comparison"]["comparison"].is_null());
+    assert!(
+        c["capture_comparison"]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("rule versions")
+    );
+
+    // A schema this version does not read is reported, not compared.
+    std::fs::write(
+        &path,
+        std::fs::read_to_string(&path)
+            .unwrap()
+            .replace("\"schema_version\": 1", "\"schema_version\": 2"),
+    )
+    .unwrap();
+    let list = json(&["--captures", "--json"]);
+    assert_eq!(list["unreadable"][0]["name"], "new");
+    assert!(
+        !capture_run(&dir, &store, &["--compare-captures", "old", "new"])
+            .status
+            .success()
+    );
+    // A missing baseline is an error with its name.
+    let out = capture_run(&dir, &store, &["--compare-captures", "missing", "old"]);
+    assert!(String::from_utf8_lossy(&out.stderr).contains("no capture `missing`"));
+
+    json(&["--delete-capture", "old", "--json"]);
+    assert!(!store.join("captures/old.json").exists());
+    assert!(
+        !capture_run(&dir, &store, &["--delete-capture", "old"])
+            .status
+            .success()
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}

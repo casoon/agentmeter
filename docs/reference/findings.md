@@ -86,6 +86,15 @@ models or front ends, and short periods, move the numbers too, and less or more 
 better or worse work. Today's `--probe` values are not part of it and are never read as an earlier
 configuration; nothing is stored, so no earlier configuration can be recovered from this view.
 
+## Captures
+
+`--capture <name> --since <period>` stores the `--compare` figures of one source and period in a
+local file, so a later period can be compared without the old logs; `--compare-captures` runs the
+same comparison on two files and adds a limitation when their periods overlap. Captures made with
+other rule versions, for another source or for another project are not compared; the reason is
+stated and no figure is. A missing baseline is an error. `--probe` values are never kept or
+assigned to an earlier capture. Format and location: `reference/json.md`.
+
 ## Tool-call rules
 
 Only with `--tool-calls`. Each observation carries the period, the sample, counter-examples that

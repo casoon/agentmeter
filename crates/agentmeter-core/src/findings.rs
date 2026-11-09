@@ -20,8 +20,8 @@ use serde::Serialize;
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, HashMap};
 
-const BASELINE_VERSION: u32 = 1;
-const REBUILD_VERSION: u32 = 1;
+pub(crate) const BASELINE_VERSION: u32 = 1;
+pub(crate) const REBUILD_VERSION: u32 = 1;
 const THRASH_VERSION: u32 = 1;
 const BIG_CONTEXT_VERSION: u32 = 2;
 const LONG_SESSION_VERSION: u32 = 1;

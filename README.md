@@ -109,6 +109,7 @@ agentmeter --projects          # projects by input
 agentmeter --findings          # rules with conclusion, measure, evidence and next step
 agentmeter --probe             # also ask Claude Code what a session start holds (see below)
 agentmeter --compare 7d         # the last 7 days next to the 7 days before (see below)
+agentmeter --since 14d --capture before  # save the figures of a period (see below)
 agentmeter --changed-on 2026-10-01  # the period before a change date next to the one since (see below)
 agentmeter --transitions        # starts, resumes, compactions, pauses as a timeline (see below)
 agentmeter --tool-calls        # also read tool calls: repeated reads/failures, large outputs (see below)
@@ -172,6 +173,17 @@ not know what changed on that day and never guesses it. A difference between the
 effect of the change: other tasks, a different model or front end and short periods change the
 numbers too, and these are listed as limitations. Less or more input is not better or worse work.
 Nothing is stored. `--project` and `--tool` apply; it does not combine with `--since`.
+
+## Captures: `--capture`, `--captures`, `--compare-captures`, `--delete-capture`
+
+`agentmeter --tool claude --since 14d --capture before-rules --change-label "new CLAUDE.md"` saves
+the figures of `--compare` for that period, up to now, in a local file. Later, make another capture
+and run `agentmeter --compare-captures before-rules after-rules` to see both values, the change
+and what it was divided by. A capture is made only when you ask and holds numbers, no conversation,
+code or configuration text; it never overwrites, and `--delete-capture <name>` removes it.
+Captures from other sources, projects or rule versions are reported as not comparable. Files live
+in `$AGENTMETER_DATA_DIR/captures`, else `$XDG_DATA_HOME/agentmeter/captures`, else
+`~/.local/share/agentmeter/captures`. As with `--compare`, a change is shown, not explained.
 
 ## Tool calls: `--tool-calls`
 

@@ -3,6 +3,7 @@
 //! Reads the local Claude Code and Codex CLI session logs and reports totals and findings.
 //! Read-only.
 
+mod captures;
 mod cli;
 mod menu;
 mod render;
@@ -258,7 +259,16 @@ pub fn run_probe(
     agentmeter_claude::probe::run(&places)
 }
 
+pub fn now_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as i64)
+}
+
 fn run(options: &Options, interactive: bool) -> ExitCode {
+    if let Some(code) = captures::store_action(options) {
+        return code;
+    }
     let instructions_dir = match options.instructions.as_deref().map(Path::new) {
         Some(dir) if !dir.is_dir() => {
             eprintln!(
@@ -331,6 +341,9 @@ fn run(options: &Options, interactive: bool) -> ExitCode {
     {
         eprintln!("agentmeter: no project matches `{name}`");
         return ExitCode::FAILURE;
+    }
+    if let Some(cli::CaptureAction::Save(name)) = &options.capture {
+        return captures::save(&sources, options, name);
     }
     if let Some(Check::DataQuality) = options.check {
         return run_check(&sources, &analyses, options.json);

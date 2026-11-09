@@ -1550,6 +1550,88 @@ fn json_source(report: &Report) -> Value {
     root
 }
 
+/// `--compare-captures`: the two captures side by side, or why they cannot be compared.
+pub fn capture_comparison_text(
+    c: &agentmeter_core::capture::CaptureComparison,
+    style: Style,
+) -> String {
+    let mut out = heading(style, "CAPTURE COMPARISON");
+    for (name, r) in [("earlier", &c.earlier), ("later  ", &c.later)] {
+        let label = r
+            .label
+            .as_ref()
+            .map_or(String::new(), |l| format!(" ({l})"));
+        out += &wrap(
+            style,
+            &format!("{}{label} · made {}", r.name, r.created),
+            &format!("  {name}    "),
+            "             ",
+            13,
+        );
+    }
+    match (&c.comparison, &c.reason) {
+        (Some(comparison), _) => out += &compare_body(comparison, style),
+        (None, reason) => {
+            out += "\n";
+            out += &wrap(
+                style,
+                &format!(
+                    "not comparable: {}",
+                    reason.as_deref().unwrap_or("unknown reason")
+                ),
+                "  note  ",
+                "        ",
+                8,
+            );
+        }
+    }
+    out
+}
+
+/// `--captures`: one line per stored capture, and files that could not be read.
+pub fn captures_text(
+    dir: &str,
+    captures: &[agentmeter_core::capture::Capture],
+    unreadable: &[(String, String)],
+    style: Style,
+) -> String {
+    let mut out = heading(style, "CAPTURES");
+    out += &wrap(style, dir, "  stored in  ", "             ", 13);
+    if captures.is_empty() && unreadable.is_empty() {
+        out += "  none\n";
+    }
+    for c in captures {
+        let label = c
+            .label
+            .as_ref()
+            .map_or(String::new(), |l| format!(" ({l})"));
+        out += &wrap(
+            style,
+            &format!(
+                "{}{label} · {} · {} to {} · {} requests",
+                c.name,
+                c.tool,
+                &c.facts.from[..10],
+                &c.facts.to[..10],
+                count(c.facts.requests)
+            ),
+            "  ",
+            "    ",
+            2,
+        );
+    }
+    for (name, reason) in unreadable {
+        out += &wrap(
+            style,
+            &format!("{name}: not read, {reason}"),
+            "  ",
+            "    ",
+            2,
+        );
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

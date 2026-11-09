@@ -4,6 +4,7 @@
 //! that and never touches a file.
 
 pub mod before_after;
+pub mod capture;
 pub mod check;
 pub mod compare;
 pub mod findings;
