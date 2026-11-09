@@ -53,6 +53,18 @@ counter-examples and one concrete next step to check. JSON output has the same f
 | `long-session` | Info | Sessions that span more than 24 hours. Wall-clock time says little about cost; a long pause costs nothing. |
 | `config-size` | Hint | Size and count of instruction files, skills, hooks and MCP servers, only when you ask for the configuration check. |
 
+## Transitions
+
+`--transitions` is a timeline, not a rule: it states what the logs show around starts, resumes
+and forks, compactions and pauses (one hour or more), per log file. It adds to `compact-thrash`
+without recounting: its compactions are the events the summary counts, and `compact-thrash`
+keeps judging how close together they are. Missing sizes after a compaction and unknown triggers
+stay unknown (always for Codex). A new chat, a pause or a log that ends carries no verdict; a
+parent is named only where the log names it. With `--tool-calls`, the first 30 calls after a
+compaction are compared with what the same log did before: re-read areas (file and line range,
+not edited since) and repeated identical failed calls are counted, with the compaction as
+evidence. That count is not an avoidable amount.
+
 ## Tool-call rules
 
 Only with `--tool-calls`. Each observation carries the period, the sample, counter-examples that

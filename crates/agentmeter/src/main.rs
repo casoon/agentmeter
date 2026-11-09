@@ -70,6 +70,8 @@ pub struct Analysis {
     pub instructions: Option<InstructionScan>,
     /// What `--tool-calls` found.
     pub tool_calls: Option<ToolAnalysis>,
+    /// What `--transitions` found.
+    pub transitions: Option<agentmeter_core::transitions::TransitionReport>,
 }
 
 pub fn read_sources(tool: Tool) -> Vec<Source> {
@@ -136,6 +138,9 @@ pub fn analyse(source: &Source, options: &Options, now_ms: i64, probe: Option<Pr
             .then(|| evaluate(dataset, since_ms, probe.as_ref())),
         probe,
         instructions: None,
+        transitions: options.transitions.then(|| {
+            agentmeter_core::transitions::analyse(dataset, source.tools.as_ref(), since_ms)
+        }),
         tool_calls: source
             .tools
             .as_ref()
@@ -331,6 +336,7 @@ fn run(options: &Options, interactive: bool) -> ExitCode {
             probe: a.probe.as_ref(),
             instructions: a.instructions.as_ref(),
             tool_calls: a.tool_calls.as_ref(),
+            transitions: a.transitions.as_ref(),
         })
         .collect();
     if options.json {

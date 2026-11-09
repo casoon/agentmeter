@@ -34,6 +34,7 @@ list under it names every field of that object. The tests compare these lists wi
 - `findings` — only with `--findings`: the diagnoses of the rules with status `observed`.
 - `rules` — only with `--findings`: the status of every rule, once each.
 - `probe` — only with `--probe` and only for `claude`: what Claude Code's `/context` reported.
+- `transitions` — only with `--transitions`: starts, resumes and forks, compactions and pauses with the context around them.
 - `tool_calls` — only with `--tool-calls`: repeated reads, repeated failures and large outputs, from tool calls and results.
 - `instructions` — only with `--instructions <dir>`: the instruction files that apply to that directory for this agent.
 
@@ -202,6 +203,55 @@ The entries of `deferred`, `memory_files` and `mcp_servers` have the same fields
 
 - `label` — category, file path or server name.
 - `tokens` — tokens as `/context` estimates them.
+
+### `sources[].transitions`
+
+One timeline per log file, from metadata only. A start, a resume or fork, a pause or the end of
+a log is a marker, never proof of a crash, an abort or lost context, and sessions are linked
+only by a parent the log names, never by closeness in time. Consumption after a transition is
+measured, not proven avoidable. The compactions are the events the summary counts.
+
+- `method` — how the timeline was built.
+- `tool_data` — `true` when `--tool-calls` was given too, so compactions carry `repeats`.
+- `counts` — the transitions by kind.
+- `projects` — one entry per project.
+- `transitions` — every transition in the period, each with its evidence.
+- `notes` — limits of the view.
+
+### `sources[].transitions.counts`
+
+- `starts` — sessions whose log starts at a conversation root, at the first request of the file.
+- `resumed_or_forked` — files that begin with history copied from another session.
+- `incomplete_log` — files whose first message has a parent that is not in the file.
+- `compactions` — compactions in the period.
+- `pauses` — gaps of one hour or more between two requests of one log file.
+
+### `sources[].transitions.projects[]`
+
+- `project` — project name.
+- `counts` — the same fields as `transitions.counts`, for this project.
+- `median_context_before_compaction` — as the log states it, or `null`.
+- `windows_checked` — compactions whose following calls could be checked (needs `--tool-calls`).
+- `compactions_with_rereads` — of those, compactions followed by at least one re-read area.
+- `rereads_after_compaction` — areas read again after those compactions, summed.
+- `hint` — worded from the pattern when at least two compactions were followed by at least five re-read areas; otherwise `null`.
+
+### `sources[].transitions.transitions[]`
+
+- `kind` — `start`, `resumed_or_forked`, `incomplete_log`, `compaction` or `pause`.
+- `project` — project name.
+- `session` — session id.
+- `time` — the first request (starts), the request before (pause) or the compaction.
+- `file` — the log file; with `event` the evidence.
+- `event` — the compaction's event id, otherwise `null`.
+- `context_before` — compaction: tokens before, as the log states it; pause: context of the request before; otherwise `null`.
+- `context_after` — compaction: tokens after as the log states it, `null` when it does not (always for Codex); never zero as a guess.
+- `next_request_context` — context of the first request after the event (starts: the first request).
+- `ms_to_next_request` — milliseconds to the next request, or `null`.
+- `requests_to_next_compaction` — compaction only: requests until the next compaction or the end of the log.
+- `then_log_ends` — compaction only: no later compaction in this file, so the count runs to the end of the log.
+- `parent` — resume or fork only: `id` of the session the log names and `in_logs` (that session's log was read); otherwise `null`.
+- `repeats` — compaction only, with `--tool-calls`: `window` (in words), `calls_checked`, `reads`, `reread_areas` (reads of a file and line range read before the compaction and not edited since), `failures_repeated` (identical failed calls repeated) and `examples` (up to three files); otherwise `null`. A count of what happened, not proof the re-read was avoidable.
 
 ### `sources[].tool_calls`
 

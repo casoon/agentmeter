@@ -215,6 +215,7 @@ struct FileFacts {
     metas: u64,
     foreign_meta: bool,
     forked: bool,
+    parent: Option<String>,
     first_is_meta: Option<bool>,
     /// `originator` and `cwd` of the first `session_meta`.
     entrypoint: Option<String>,
@@ -349,6 +350,7 @@ impl Reader {
                 reason,
                 entrypoint: facts.entrypoint.take(),
                 cwd: facts.cwd.take(),
+                parent: facts.parent.take(),
             });
         }
     }
@@ -447,6 +449,7 @@ impl Reader {
             }
             facts.sub = meta.thread_source.as_deref() == Some("subagent");
             facts.forked = meta.forked_from_id.is_some();
+            facts.parent = meta.forked_from_id.clone().filter(|id| !id.is_empty());
             if let Some(name) = meta.cwd.as_deref().and_then(project_name) {
                 facts.project = name;
             }
@@ -459,6 +462,9 @@ impl Reader {
         } else if meta.id.as_deref().is_some_and(|id| id != facts.session) {
             // A later meta of another thread is the replayed history of a parent.
             facts.foreign_meta = true;
+            if facts.parent.is_none() {
+                facts.parent = meta.id.clone();
+            }
         }
     }
 

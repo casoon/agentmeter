@@ -57,6 +57,8 @@ pub struct Options {
     pub instructions: Option<String>,
     /// Also read tool calls and results (repeated reads and failures, large outputs).
     pub tool_calls: bool,
+    /// Timeline of starts, resumes, compactions and pauses.
+    pub transitions: bool,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -97,6 +99,7 @@ where
             "--findings" => options.findings = true,
             "--json" => options.json = true,
             "--tool-calls" => options.tool_calls = true,
+            "--transitions" => options.transitions = true,
             "--probe" => {
                 options.probe = true;
                 options.findings = true;
@@ -149,7 +152,8 @@ where
         || options.projects
         || options.findings
         || options.instructions.is_some()
-        || options.tool_calls)
+        || options.tool_calls
+        || options.transitions)
     {
         options.summary = true;
     }
@@ -191,6 +195,10 @@ Options:
                          area, identical failed calls and very large outputs. Opens message
                          content for call ids, paths, a fingerprint of commands and the byte
                          size of results; no command or output text is kept or printed.
+      --transitions      Timeline of session starts, resumes/forks, compactions and pauses
+                         with the context around each; with --tool-calls also the areas read
+                         again right after a compaction. Metadata only; a pause or a new chat
+                         is a marker, never a verdict.
       --json             Print JSON instead of text (schema: docs/reference/json.md)
       --check <name>     data-quality: exit 1 if a source has unreadable data or none to
                          analyse, 0 otherwise, 2 for a bad call. Findings never fail it.
@@ -284,6 +292,14 @@ mod tests {
             panic!("expected a run");
         };
         assert!(!options.tool_calls);
+    }
+
+    #[test]
+    fn transitions_is_a_flag_of_its_own() {
+        let Invocation::Run(options) = run(&["--transitions"]) else {
+            panic!("expected a run");
+        };
+        assert!(options.transitions && !options.summary && !options.tool_calls);
     }
 
     #[test]

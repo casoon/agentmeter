@@ -153,6 +153,8 @@ struct FileFacts {
     first_message_is_root: Option<bool>,
     /// Lines carry a session id other than the file name: resume or fork copied history.
     foreign_session: bool,
+    /// The first session id other than the file name: the session a resume copied from.
+    parent: Option<String>,
     /// `entrypoint` and `cwd` of the first line that has them.
     entrypoint: Option<String>,
     cwd: Option<String>,
@@ -229,6 +231,9 @@ impl Reader {
                     .is_some_and(|s| !s.is_empty() && s != file_stem)
                 {
                     facts.foreign_session = true;
+                    if facts.parent.is_none() {
+                        facts.parent = line.session_id.clone();
+                    }
                 }
             }
 
@@ -268,6 +273,7 @@ impl Reader {
                 reason,
                 entrypoint: facts.entrypoint,
                 cwd: facts.cwd,
+                parent: facts.parent,
             });
         }
     }

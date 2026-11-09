@@ -237,6 +237,7 @@ fn detail(id: &str, views: &[View], period: &str, style: Style) -> String {
                 probe: a.probe.as_ref().filter(|_| id.starts_with("rule:")),
                 instructions: None,
                 tool_calls: None,
+                transitions: None,
             };
             render::text(&report, style)
         })

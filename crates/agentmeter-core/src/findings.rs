@@ -1340,6 +1340,7 @@ mod tests {
 
     fn start(session: &str, clean: bool) -> SessionStart {
         SessionStart {
+            parent: None,
             session: session.into(),
             source: 0,
             clean,
