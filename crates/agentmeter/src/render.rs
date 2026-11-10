@@ -6,7 +6,7 @@ use agentmeter_core::instructions::{InstructionScan, LoadState};
 use agentmeter_core::model::{DataQuality, PROBE_EMPTY_PLACE, Probe, ProbeItem, ReadStats};
 use agentmeter_core::report::{ProjectRow, SessionRow, Summary};
 use agentmeter_core::toolcalls::ToolAnalysis;
-use runemark::{ColorMode, Console, Tone};
+use runemark::{ColorMode, Console, SymbolTheme, Tone, Verdict};
 use serde_json::{Value, json};
 use std::path::PathBuf;
 
@@ -14,7 +14,7 @@ use std::path::PathBuf;
 const TABLE_ROWS: usize = 20;
 
 /// Colour through runemark's tones, switched off for pipes and `NO_COLOR`. Bars and symbols stay
-/// without colour, so a pipe or `NO_COLOR` keeps the picture.
+/// without colour, so a pipe or `NO_COLOR` keeps the picture. Links to files follow the colour.
 #[derive(Clone, Copy)]
 pub struct Style {
     pub color: bool,
@@ -56,6 +56,31 @@ impl Style {
     }
     fn dim(self, text: &str) -> String {
         self.tone(Tone::Muted, text)
+    }
+    /// The symbol of a verdict in its tone.
+    fn mark(self, verdict: Verdict) -> String {
+        self.tone(verdict.tone(), symbol(verdict))
+    }
+}
+
+/// States as runemark verdicts: something to act on, something to look at, nothing to report,
+/// not measurable. None of them is an error; `Warning` and `Failed` mark the reading only.
+const ACT: Verdict = Verdict::ActionRequired;
+const LOOK: Verdict = Verdict::Info;
+const FINE: Verdict = Verdict::Passed;
+const UNMEASURED: Verdict = Verdict::Skipped;
+
+/// The verdict's symbol, the same with and without colour.
+fn symbol(verdict: Verdict) -> &'static str {
+    verdict.symbol(SymbolTheme::Unicode)
+}
+
+/// The verdict of a rule status.
+fn status_verdict(status: &str) -> Verdict {
+    match status {
+        "observed" => ACT,
+        "checked_none" => FINE,
+        _ => UNMEASURED,
     }
 }
 
@@ -203,7 +228,7 @@ pub fn text(report: &Report, style: Style) -> String {
         out += &summary_text(summary, style);
     }
     if let Some(findings) = report.findings {
-        out += &findings_text(findings, report.probe, style);
+        out += &findings_text(findings, report.probe, report.places, style);
     }
     if let Some(c) = report.compare {
         out += &compare_text(c, style);
@@ -212,16 +237,16 @@ pub fn text(report: &Report, style: Style) -> String {
         out += &before_after_text(b, style);
     }
     if let Some(t) = report.transitions {
-        out += &transitions_text(t, style);
+        out += &transitions_text(t, report.places, style);
     }
     if let Some(s) = report.subagents {
-        out += &subagents_text(s, style);
+        out += &subagents_text(s, report.places, style);
     }
     if let Some(c) = report.compaction_causes {
         out += &compaction_causes_text(c, style);
     }
     if let Some(tools) = report.tool_calls {
-        out += &tool_calls_text(tools, style);
+        out += &tool_calls_text(tools, report.places, style);
     }
     if let Some(skills) = report.skills {
         out += &skills_text(skills, style);
@@ -359,7 +384,11 @@ fn compare_body(c: &agentmeter_core::compare::Comparison, style: Style) -> Strin
     out
 }
 
-fn transitions_text(r: &agentmeter_core::transitions::TransitionReport, style: Style) -> String {
+fn transitions_text(
+    r: &agentmeter_core::transitions::TransitionReport,
+    roots: &[PathBuf],
+    style: Style,
+) -> String {
     let mut out = heading(style, "TRANSITIONS");
     out += &wrap(style, r.method, "  method     ", "             ", 13);
     let c = &r.counts;
@@ -464,7 +493,7 @@ fn transitions_text(r: &agentmeter_core::transitions::TransitionReport, style: S
                 out += &wrap(style, e, "    · ", "      ", 6);
             }
         }
-        out += &evidence_text(style, &t.file, t.event.as_deref().unwrap_or("-"));
+        out += &evidence_text(style, roots, &t.file, t.event.as_deref().unwrap_or("-"));
     }
     out += "\n";
     for n in &r.notes {
@@ -537,7 +566,11 @@ fn run_length(ms: i64) -> String {
     }
 }
 
-fn subagents_text(r: &agentmeter_core::subagents::SubagentReport, style: Style) -> String {
+fn subagents_text(
+    r: &agentmeter_core::subagents::SubagentReport,
+    roots: &[PathBuf],
+    style: Style,
+) -> String {
     let mut out = heading(style, "SUBAGENTS");
     out += &wrap(style, r.method, "  method     ", "             ", 13);
     let c = &r.counts;
@@ -695,7 +728,7 @@ fn subagents_text(r: &agentmeter_core::subagents::SubagentReport, style: Style) 
             );
         }
         if let Some(first) = root.children.first() {
-            out += &evidence_text(style, &first.file, &first.first);
+            out += &evidence_text(style, roots, &first.file, &first.first);
         }
         out += "\n";
     }
@@ -717,7 +750,7 @@ fn subagents_text(r: &agentmeter_core::subagents::SubagentReport, style: Style) 
                 "      ",
                 6,
             );
-            out += &evidence_text(style, &child.file, &child.first);
+            out += &evidence_text(style, roots, &child.file, &child.first);
         }
         out += "\n";
     }
@@ -929,7 +962,7 @@ fn compaction_causes_text(r: &agentmeter_core::compaction::CausesReport, style: 
     out
 }
 
-fn tool_calls_text(a: &ToolAnalysis, style: Style) -> String {
+fn tool_calls_text(a: &ToolAnalysis, roots: &[PathBuf], style: Style) -> String {
     let mut out = heading(style, "TOOL CALLS");
     out += &wrap(style, a.method, "  method     ", "             ", 13);
     out += &format!(
@@ -939,14 +972,9 @@ fn tool_calls_text(a: &ToolAnalysis, style: Style) -> String {
         count(a.stats.duplicates_merged)
     );
     for r in &a.rules {
-        let (mark, tone) = match r.status {
-            "observed" => ("◆", Tone::Warning),
-            "checked_none" => ("✓", Tone::Success),
-            _ => ("·", Tone::Muted),
-        };
         out += &format!(
             "\n  {} {} (v{}) · {}\n",
-            style.tone(tone, mark),
+            style.mark(status_verdict(r.status)),
             style.bold(r.id),
             r.version,
             match r.status {
@@ -1018,7 +1046,7 @@ fn tool_calls_text(a: &ToolAnalysis, style: Style) -> String {
             );
         }
         for ev in &r.evidence {
-            out += &evidence_text(style, &ev.file, &ev.event);
+            out += &evidence_text(style, roots, &ev.file, &ev.event);
         }
         if let Some(n) = &r.next_step {
             out += &wrap(style, &format!("next  {n}"), indent, "          ", 4);
@@ -1078,14 +1106,14 @@ fn skills_text(a: &agentmeter_core::skills::SkillAnalysis, style: Style) -> Stri
             13,
         );
     }
-    let (mark, tone, word) = match a.status {
-        "observed" => ("◆", Tone::Warning, "not observed in the period"),
-        "checked_none" => ("✓", Tone::Success, "checked, nothing to report"),
-        _ => ("·", Tone::Muted, "not measurable"),
+    let word = match a.status {
+        "observed" => "not observed in the period",
+        "checked_none" => "checked, nothing to report",
+        _ => "not measurable",
     };
     out += &format!(
         "\n  {} {} · {}\n",
-        style.tone(tone, mark),
+        style.mark(status_verdict(a.status)),
         style.bold("unused-skills"),
         word
     );
@@ -1236,7 +1264,7 @@ fn instructions_text(scan: &InstructionScan, style: Style) -> String {
     for f in &scan.findings {
         out += &format!(
             "\n  {} {} · certainty {}\n",
-            style.tone(Tone::Warning, "◆"),
+            style.mark(ACT),
             style.bold(f.rule),
             f.certainty
         );
@@ -1371,12 +1399,12 @@ fn summary_text(s: &Summary, style: Style) -> String {
     out
 }
 
-/// Symbol, word and tone of a conclusion kind.
-fn kind_mark(kind: &str) -> (&'static str, &'static str, Tone) {
+/// Verdict and word of a conclusion kind.
+fn kind_mark(kind: &str) -> (Verdict, &'static str) {
     match kind {
-        "lever" => ("◆", "lever", Tone::Warning),
-        "look" => ("?", "look at it", Tone::Info),
-        _ => ("✓", "fine", Tone::Success),
+        "lever" => (ACT, "lever"),
+        "look" => (LOOK, "look at it"),
+        _ => (FINE, "fine"),
     }
 }
 
@@ -1496,27 +1524,66 @@ fn stacked_text(parts: &[Part], style: Style) -> String {
 
 /// An evidence line: file and event, broken before ` · ` and after `/` where the line would
 /// be too wide, the rest under the first.
-fn evidence_text(style: Style, file: &str, event: &str) -> String {
+fn evidence_text(style: Style, roots: &[PathBuf], file: &str, event: &str) -> String {
     const INDENT: &str = "              ";
     let room = style.width - INDENT.len();
-    let mut pieces: Vec<String> = file.split_inclusive('/').map(str::to_owned).collect();
-    pieces.push(format!(" · {event}"));
-    let mut lines: Vec<String> = vec![String::new()];
-    for piece in pieces {
-        let line = lines.last_mut().expect("lines starts with one");
+    let url = if style.color {
+        file_url(roots, file)
+    } else {
+        None
+    };
+    let link = |text: &str| match &url {
+        Some(url) => runemark::format_osc8(url, text),
+        None => text.to_owned(),
+    };
+    let event = format!(" · {event}");
+    // Each line: the part of the path on it, then the event where it lands.
+    let mut lines: Vec<(String, &str)> = vec![(String::new(), "")];
+    for piece in file.split_inclusive('/') {
+        let (line, _) = lines.last_mut().expect("lines starts with one");
         if line.is_empty() || line.chars().count() + piece.chars().count() <= room {
-            *line += &piece;
+            *line += piece;
         } else {
-            lines.push(piece.trim_start().to_owned());
+            lines.push((piece.to_owned(), ""));
         }
     }
+    let (last, _) = lines.last().expect("lines starts with one");
+    if last.chars().count() + event.chars().count() <= room {
+        lines.last_mut().expect("lines starts with one").1 = &event;
+    } else {
+        lines.push((String::new(), event.trim_start()));
+    }
     let mut out = String::new();
-    for (i, line) in lines.iter().enumerate() {
+    for (i, (path, event)) in lines.iter().enumerate() {
         out += if i == 0 { "    evidence  " } else { INDENT };
-        out += line;
+        if !path.is_empty() {
+            out += &link(path);
+        }
+        out += event;
         out += "\n";
     }
     out
+}
+
+/// The `file://` address of a log file named relative to one of the places read, if it is there.
+/// Claude Code names files below the place, Codex below the directory that holds it.
+fn file_url(roots: &[PathBuf], file: &str) -> Option<String> {
+    let path = roots
+        .iter()
+        .flat_map(|root| [Some(root.as_path()), root.parent()])
+        .flatten()
+        .map(|dir| dir.join(file))
+        .find(|path| path.is_file())?;
+    let path = path.canonicalize().ok()?;
+    let mut url = String::from("file://");
+    for byte in path.to_str()?.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'/' | b'-' | b'.' | b'_' | b'~') {
+            url.push(char::from(byte));
+        } else {
+            url += &format!("%{byte:02X}");
+        }
+    }
+    Some(url)
 }
 
 /// What `/context` reported: the configuration run in full, the project runs as differences.
@@ -1602,7 +1669,7 @@ fn probe_text(probe: &Probe, style: Style) -> String {
     for failure in &probe.failures {
         out += &format!(
             "    {} probe in {} failed: {}\n",
-            style.tone(Tone::Error, "✗"),
+            style.mark(Verdict::Failed),
             failure.place,
             failure.reason
         );
@@ -1610,7 +1677,12 @@ fn probe_text(probe: &Probe, style: Style) -> String {
     out
 }
 
-fn findings_text(evaluation: &Evaluation, probe: Option<&Probe>, style: Style) -> String {
+fn findings_text(
+    evaluation: &Evaluation,
+    probe: Option<&Probe>,
+    roots: &[PathBuf],
+    style: Style,
+) -> String {
     let mut out = String::new();
     let tally = |kind: &str| {
         evaluation
@@ -1621,30 +1693,32 @@ fn findings_text(evaluation: &Evaluation, probe: Option<&Probe>, style: Style) -
     };
     let status = |s: &str| evaluation.rules.iter().filter(|r| r.status == s).count();
     let headline = [
-        (tally("lever"), "lever", "levers", "◆", Tone::Warning),
-        (tally("look"), "to look at", "to look at", "?", Tone::Info),
-        (tally("fine"), "fine", "fine", "✓", Tone::Success),
+        (tally("lever"), "lever", "levers", ACT),
+        (tally("look"), "to look at", "to look at", LOOK),
+        (tally("fine"), "fine", "fine", FINE),
         (
             status("checked_none"),
             "nothing found",
             "nothing found",
-            "✓",
-            Tone::Success,
+            FINE,
         ),
         (
             status("not_measurable"),
             "not measurable",
             "not measurable",
-            "·",
-            Tone::Muted,
+            UNMEASURED,
         ),
     ]
     .iter()
     .filter(|(n, ..)| *n > 0)
-    .map(|(n, one, many, mark, tone)| {
+    .map(|(n, one, many, verdict)| {
         style.tone(
-            *tone,
-            &format!("{mark} {n} {}", if *n == 1 { one } else { many }),
+            verdict.tone(),
+            &format!(
+                "{} {n} {}",
+                symbol(*verdict),
+                if *n == 1 { one } else { many }
+            ),
         )
     })
     .collect::<Vec<_>>()
@@ -1663,8 +1737,9 @@ fn findings_text(evaluation: &Evaluation, probe: Option<&Probe>, style: Style) -
     let mut findings: Vec<&Finding> = evaluation.findings.iter().collect();
     findings.sort_by_key(|f| (kind_rank(f.conclusion.kind), f.level));
     for f in findings {
-        let (mark, word, tone) = kind_mark(f.conclusion.kind);
-        let title = format!("{mark} {}", f.rule);
+        let (verdict, word) = kind_mark(f.conclusion.kind);
+        let tone = verdict.tone();
+        let title = format!("{} {}", symbol(verdict), f.rule);
         let tags = format!(
             "{word} · {} · {} · v{}",
             f.level.label(),
@@ -1734,7 +1809,7 @@ fn findings_text(evaluation: &Evaluation, probe: Option<&Probe>, style: Style) -
             14,
         );
         for e in &f.evidence {
-            out += &style.dim(&evidence_text(style, &e.file, &e.event));
+            out += &style.dim(&evidence_text(style, roots, &e.file, &e.event));
         }
         for c in &f.counterexamples {
             out += &wrap(
@@ -1763,17 +1838,14 @@ fn findings_text(evaluation: &Evaluation, probe: Option<&Probe>, style: Style) -
         out += "\n";
     }
     for r in quiet.iter() {
-        let (mark, tone, line) = match (r.status, &r.message, &r.reason) {
-            ("checked_none", Some(message), _) => {
-                ("✓", Tone::Success, format!("nothing to report: {message}"))
-            }
+        let (verdict, line) = match (r.status, &r.message, &r.reason) {
+            ("checked_none", Some(message), _) => (FINE, format!("nothing to report: {message}")),
             (_, _, reason) => (
-                "·",
-                Tone::Muted,
+                UNMEASURED,
                 format!("not measurable: {}", reason.as_deref().unwrap_or("")),
             ),
         };
-        let first = format!("{} {:<16}", style.tone(tone, mark), r.rule);
+        let first = format!("{} {:<16}", style.mark(verdict), r.rule);
         out += &wrap(
             style,
             &style.dim(&format!("{line} (v{})", r.rule_version)),
@@ -1882,9 +1954,9 @@ fn projects_text(rows: &[ProjectRow], style: Style) -> String {
 fn read_text(report: &Report, style: Style) -> String {
     let quality = report.quality;
     let stats: &ReadStats = &quality.read;
-    let ok = style.tone(Tone::Success, "✓");
-    let note = style.tone(Tone::Warning, "!");
-    let bad = style.tone(Tone::Error, "✗");
+    let ok = style.mark(FINE);
+    let note = style.mark(Verdict::Warning);
+    let bad = style.mark(Verdict::Failed);
     let mut out = heading(style, "READ");
     let line = |mark: &str, what: &str, text: String| {
         wrap(
@@ -2363,14 +2435,44 @@ mod tests {
     fn evidence_breaks_after_a_slash_and_before_the_event() {
         let style = Style::new(false, None);
         assert_eq!(
-            evidence_text(style, FILE, "msg_01S8BuvoxgQfkPcmJczZ5xH1"),
+            evidence_text(style, &[], FILE, "msg_01S8BuvoxgQfkPcmJczZ5xH1"),
             "    evidence  -Users-me-GitHub-ai-agent-config/\n\
              \x20             76c6c7ec-4dbe-4027-b596-a6e9912d95e2.jsonl · msg_01S8BuvoxgQfkPcmJczZ5xH1\n"
         );
         assert_eq!(
-            evidence_text(style, "a/b.jsonl", "line:3"),
+            evidence_text(style, &[], "a/b.jsonl", "line:3"),
             "    evidence  a/b.jsonl · line:3\n"
         );
+    }
+
+    #[test]
+    fn evidence_links_a_file_that_is_there_and_only_with_colour() {
+        let root = std::env::temp_dir().join(format!("agentmeter-link-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("my project")).unwrap();
+        std::fs::write(root.join("my project/a.jsonl"), "").unwrap();
+        let roots = [root.clone()];
+        let linked = evidence_text(
+            Style::new(true, None),
+            &roots,
+            "my project/a.jsonl",
+            "line:3",
+        );
+        assert!(linked.contains("\x1b]8;;file:///"), "{linked:?}");
+        assert!(
+            linked.contains("my%20project/a.jsonl\x1b\\my project/"),
+            "{linked:?}"
+        );
+        assert!(linked.ends_with("\x1b]8;;\x1b\\ · line:3\n"), "{linked:?}");
+        let plain = evidence_text(
+            Style::new(false, None),
+            &roots,
+            "my project/a.jsonl",
+            "line:3",
+        );
+        assert_eq!(plain, "    evidence  my project/a.jsonl · line:3\n");
+        let missing = evidence_text(Style::new(true, None), &roots, "gone.jsonl", "line:3");
+        assert_eq!(missing, "    evidence  gone.jsonl · line:3\n");
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -2379,7 +2481,7 @@ mod tests {
         assert_eq!(Style::new(false, Some(40)).width, MIN_WIDTH);
         for columns in [80, 84, 88] {
             let style = Style::new(false, Some(columns));
-            let text = evidence_text(style, FILE, "msg_01S8BuvoxgQfkPcmJczZ5xH1")
+            let text = evidence_text(style, &[], FILE, "msg_01S8BuvoxgQfkPcmJczZ5xH1")
                 + &wrap(style, &"word ".repeat(40), "  ", "  ", 2)
                 + &wrap(
                     style,

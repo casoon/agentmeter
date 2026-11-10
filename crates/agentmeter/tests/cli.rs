@@ -432,7 +432,7 @@ fn findings_text_shows_conclusions_bars_and_what_was_read() {
     let output = run("epoch-baseline", &["--probe"]);
     let text = String::from_utf8(output.stdout).unwrap();
     assert!(!text.contains('\x1b'));
-    assert!(text.contains("READ") && text.contains("✓ probe"));
+    assert!(text.contains("READ") && text.contains("✔ probe"));
     assert!(text.contains("⇒ today's configuration is 33k of the median start 75k"));
     assert!(text.contains("████"));
     assert!(text.contains("loaded on demand, not sent at start"));
@@ -1848,7 +1848,7 @@ fn gaps_are_counted_with_longest_run_and_never_called_a_loss() {
     assert_eq!(g["longest_gap"]["days"], 3);
     assert_eq!(g["periods"].as_array().unwrap().len(), 2);
     let text = String::from_utf8(run_dir(&dir, &[]).stdout).unwrap();
-    assert!(has_line_starting(&text, "! gaps"), "{text}");
+    assert!(has_line_starting(&text, "⚠ gaps"), "{text}");
     assert!(text.contains("the logs do not say which"));
     assert!(!text.contains("lost") && !text.contains("deleted"));
     for line in text.lines() {
@@ -1870,7 +1870,7 @@ fn a_period_without_gaps_or_with_one_day_shows_no_hint() {
         assert_eq!(g["periods"].as_array().unwrap().len(), 0);
         assert_eq!(g["span_days"].as_u64().unwrap(), days.len() as u64);
         let text = String::from_utf8(run_dir(&dir, &[]).stdout).unwrap();
-        assert!(!has_line_starting(&text, "! gaps"), "{text}");
+        assert!(!has_line_starting(&text, "⚠ gaps"), "{text}");
         let _ = std::fs::remove_dir_all(dir);
     }
 }
