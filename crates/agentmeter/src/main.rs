@@ -16,11 +16,12 @@ use agentmeter_core::toolcalls::{ToolAnalysis, ToolData};
 use agentmeter_core::{Compaction, DataQuality, Evaluation, Request, check, evaluate};
 use cli::{Check, Invocation, Options, Since, Tool};
 use render::{Report, Style};
+use runemark::{ColorMode, Console, ProgressMode, ProgressSink, TerminalProgress, Verdict};
 use std::collections::HashMap;
 use std::io::{self, IsTerminal};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -89,6 +90,42 @@ pub struct Analysis {
     pub ai_report: Option<agentmeter_core::ai_report::AiReport>,
 }
 
+/// Runs `read` and shows on stderr how far it is once it has taken a second, since large logs
+/// take a while. Only on a terminal: a redirected stderr stays as it was.
+fn with_progress<T>(
+    label: &str,
+    tool_calls: bool,
+    read: impl FnOnce(&mut dyn FnMut(u64, u64)) -> T,
+) -> T {
+    let terminal = io::stderr().is_terminal();
+    let mode = if terminal {
+        ProgressMode::Auto
+    } else {
+        ProgressMode::Never
+    };
+    let sink = TerminalProgress::stderr(mode, Console::stderr(ColorMode::Auto), terminal);
+    let what = if tool_calls {
+        format!("{label} logs with tool calls")
+    } else {
+        format!("{label} logs")
+    };
+    let begun = Instant::now();
+    let mut shown = None;
+    let out = read(&mut |done, total| {
+        if shown.is_none() && begun.elapsed() >= Duration::from_secs(1) {
+            sink.start(total, &what);
+            shown = Some(total);
+        }
+        if shown.is_some() {
+            sink.advance(done, &what);
+        }
+    });
+    if let Some(files) = shown {
+        sink.finish(Verdict::Passed, &format!("{what}: {files} files read"));
+    }
+    out
+}
+
 pub fn read_sources(tool: Tool) -> Vec<Source> {
     read_sources_with(tool, false)
 }
@@ -98,7 +135,9 @@ pub fn read_sources_with(tool: Tool, tool_calls: bool) -> Vec<Source> {
     if matches!(tool, Tool::All | Tool::Claude) {
         let dirs = agentmeter_claude::config_dirs();
         let places = dirs.iter().map(|d| d.join("projects")).collect();
-        let (dataset, tools) = agentmeter_claude::read_with_tools(&dirs, tool_calls);
+        let (dataset, tools) = with_progress("Claude Code", tool_calls, |progress| {
+            agentmeter_claude::read_with_progress(&dirs, tool_calls, progress)
+        });
         sources.push(Source {
             tool: "claude",
             label: "Claude Code",
@@ -110,7 +149,9 @@ pub fn read_sources_with(tool: Tool, tool_calls: bool) -> Vec<Source> {
     if matches!(tool, Tool::All | Tool::Codex) {
         let homes = agentmeter_codex::config_dirs();
         let places = homes.iter().map(|h| h.join("sessions")).collect();
-        let (dataset, tools) = agentmeter_codex::read_with_tools(&homes, tool_calls);
+        let (dataset, tools) = with_progress("Codex CLI", tool_calls, |progress| {
+            agentmeter_codex::read_with_progress(&homes, tool_calls, progress)
+        });
         sources.push(Source {
             tool: "codex",
             label: "Codex CLI",
