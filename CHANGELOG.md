@@ -7,6 +7,10 @@ behaviour.
 
 ## [Unreleased]
 
+### Changed
+
+- **Pages:** the overview and the home page describe the released state and the analyses added in 0.2.0, and the privacy text names what `--tool-calls` and `--skills` read.
+
 ## [0.2.0] - 2026-11-10
 
 ### Added
