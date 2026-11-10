@@ -131,6 +131,18 @@ pub struct AgentLink {
     pub basis: Option<&'static str>,
 }
 
+/// One finished run of a delegated agent as the log records it at the run's end. The duration is
+/// wall time from start to end of that run and still contains waiting. An agent that was resumed
+/// has one record per run.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct AgentRun {
+    /// The agent's log file name, as in [`AgentLink::agent`].
+    pub agent: String,
+    /// When the log recorded the end of the run.
+    pub end_ms: i64,
+    pub duration_ms: u64,
+}
+
 /// What the agent itself reports it would send at the start of a session in one directory
 /// (Claude Code `/context`). Estimates by the agent, not counted from a log.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -193,6 +205,11 @@ pub struct Dataset {
     pub session_starts: Vec<SessionStart>,
     /// Delegated agents' log files with the parent the log names.
     pub agent_links: Vec<AgentLink>,
+    /// Finished runs of delegated agents where the log records their duration (Claude Code).
+    pub agent_runs: Vec<AgentRun>,
+    /// Records of a finished run whose agent was not read: the id is part of the notice text,
+    /// which is opened only together with the tool calls.
+    pub agent_runs_unlinked: u64,
     pub stats: ReadStats,
 }
 

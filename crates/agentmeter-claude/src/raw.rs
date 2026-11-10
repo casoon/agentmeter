@@ -32,6 +32,43 @@ pub struct RawLine<'a> {
     pub message: Option<&'a RawValue>,
     #[serde(rename = "compactMetadata", default, borrow)]
     pub compact_metadata: Option<&'a RawValue>,
+    /// Structured result of a tool call on a user line; only the run figures of an agent are read.
+    #[serde(rename = "toolUseResult", default, borrow)]
+    pub tool_use_result: Option<&'a RawValue>,
+    #[serde(default, borrow)]
+    pub attachment: Option<&'a RawValue>,
+}
+
+/// The run figures in the result of a delegated agent that ran in the foreground.
+#[derive(Deserialize)]
+pub struct RawAgentResult {
+    #[serde(rename = "agentId", default)]
+    pub agent_id: Option<String>,
+    #[serde(rename = "totalDurationMs", default)]
+    pub total_duration_ms: Option<u64>,
+}
+
+/// An attachment line; of interest is the notice that a background agent finished.
+#[derive(Deserialize)]
+pub struct RawAttachment<'a> {
+    #[serde(rename = "type", default)]
+    pub kind: Option<String>,
+    #[serde(rename = "commandMode", default)]
+    pub command_mode: Option<String>,
+    #[serde(default)]
+    pub timestamp: Option<String>,
+    #[serde(default)]
+    pub usage: Option<RawRunUsage>,
+    /// The notice text, kept unparsed; only the task id in it is looked for, and only when tool
+    /// calls are read.
+    #[serde(default, borrow)]
+    pub prompt: Option<&'a RawValue>,
+}
+
+#[derive(Deserialize)]
+pub struct RawRunUsage {
+    #[serde(rename = "durationMs", default)]
+    pub duration_ms: Option<u64>,
 }
 
 #[derive(Deserialize)]

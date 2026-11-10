@@ -635,6 +635,8 @@ impl Reader {
             files: self.files,
             session_starts: self.session_starts,
             agent_links: self.agent_links,
+            agent_runs: Vec::new(),
+            agent_runs_unlinked: 0,
             stats: self.stats,
         }
     }

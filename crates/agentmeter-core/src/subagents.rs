@@ -8,10 +8,15 @@
 //! requests of assigned agents (nested ones included once, under their root session) and
 //! unassigned agent requests add up to the requests the summary counts.
 //!
-//! Time comes from request timestamps only. The logs hold no run time, so a run is a stretch of
-//! requests that are less than the pause limit of `--transitions` apart; its length (first to last
-//! request) still contains waiting, and a run of one request has no observed length. Overlap of
-//! runs is a reason to look, not proof of conflicting work.
+//! Time comes from request timestamps: a run is a stretch of requests that are less than the pause
+//! limit of `--transitions` apart; its length (first to last request) still contains waiting, and
+//! a run of one request has no observed length. Overlap of runs is a reason to look, not proof of
+//! conflicting work.
+//!
+//! Claude Code also logs how long a finished run of an agent took (`logged_run_ms`): wall time of
+//! that run, waiting included. It is known for agents that ran in the foreground, and for
+//! background agents when the notice of their end was read with the tool calls; elsewhere it
+//! stays unknown.
 
 use crate::model::{AgentLink, Dataset, Request};
 use crate::time::format_iso;
@@ -81,6 +86,10 @@ pub struct Child {
     pub file: String,
     pub first: String,
     pub last: String,
+    /// Finished runs of the agent in the period whose duration the log records.
+    pub logged_runs: u64,
+    /// Their durations added up, milliseconds: wall time, waiting included; `null` without one.
+    pub logged_run_ms: Option<u64>,
     pub usage: Usage,
 }
 
@@ -116,6 +125,11 @@ pub struct Root {
     /// Gaps of the pause limit or more between runs.
     pub paused_ms: i64,
     pub runs: u64,
+    /// Agents of this session with a logged run time.
+    pub agents_with_logged_run: u64,
+    /// Their logged run times added up; agents can run at once, so this is not elapsed time.
+    /// `null` when no agent has one.
+    pub logged_run_ms: Option<u64>,
     /// Areas (file and line range) read by two or more streams of this session; `null` when
     /// file targets are not measurable.
     pub shared_reads: Option<u64>,
@@ -159,6 +173,10 @@ pub struct Counts {
     pub nested_agents: u64,
     pub max_depth: u64,
     pub unassigned_agents: u64,
+    /// Agents with at least one run whose duration the log records.
+    pub agents_with_logged_run: u64,
+    /// Logged run durations that name no agent in the data read.
+    pub run_records_unlinked: u64,
     pub overlaps_delegation: u64,
     pub overlaps_same_task: u64,
     pub overlaps_time_only: u64,
@@ -390,16 +408,31 @@ pub fn analyse(
     }
     let mut accs: BTreeMap<String, Acc> = BTreeMap::new();
     let mut unassigned: Vec<Child> = Vec::new();
-    let child_of = |s: &Stream, usage: Usage| Child {
-        agent: s.link.map(|l| l.agent.clone()),
-        parent: s.link.and_then(|l| l.parent.clone()),
-        parent_basis: s.link.and_then(|l| l.basis),
-        depth: s.root.as_ref().map(|_| s.ancestry.len() as u64),
-        project: s.project.clone(),
-        file: s.file.clone(),
-        first: format_iso(s.requests[0].time_ms),
-        last: format_iso(s.requests[s.requests.len() - 1].time_ms),
-        usage,
+    let mut logged: HashMap<&str, (u64, u64)> = HashMap::new();
+    for run in dataset
+        .agent_runs
+        .iter()
+        .filter(|r| since_ms.is_none_or(|s| r.end_ms >= s))
+    {
+        let entry = logged.entry(run.agent.as_str()).or_default();
+        entry.0 += 1;
+        entry.1 += run.duration_ms;
+    }
+    let child_of = |s: &Stream, usage: Usage| {
+        let runs = s.link.and_then(|l| logged.get(l.agent.as_str())).copied();
+        Child {
+            logged_runs: runs.map_or(0, |r| r.0),
+            logged_run_ms: runs.map(|r| r.1),
+            agent: s.link.map(|l| l.agent.clone()),
+            parent: s.link.and_then(|l| l.parent.clone()),
+            parent_basis: s.link.and_then(|l| l.basis),
+            depth: s.root.as_ref().map(|_| s.ancestry.len() as u64),
+            project: s.project.clone(),
+            file: s.file.clone(),
+            first: format_iso(s.requests[0].time_ms),
+            last: format_iso(s.requests[s.requests.len() - 1].time_ms),
+            usage,
+        }
     };
     for (i, s) in streams.iter().enumerate() {
         let mut usage = Usage::default();
@@ -653,6 +686,11 @@ pub fn analyse(
             active_ms: span - paused,
             paused_ms: paused,
             runs: run_count,
+            agents_with_logged_run: children.iter().filter(|c| c.logged_runs > 0).count() as u64,
+            logged_run_ms: children
+                .iter()
+                .filter_map(|c| c.logged_run_ms)
+                .reduce(|a, b| a + b),
             shared_reads,
             shared_reads_other_ranges: other_ranges,
             shared_writes,
@@ -675,6 +713,13 @@ pub fn analyse(
     counts.sessions_with_agents = roots.len() as u64;
     counts.agents = streams.iter().filter(|s| s.key.1).count() as u64;
     counts.unassigned_agents = unassigned.len() as u64;
+    counts.agents_with_logged_run = roots
+        .iter()
+        .flat_map(|r| &r.children)
+        .chain(&unassigned)
+        .filter(|c| c.logged_runs > 0)
+        .count() as u64;
+    counts.run_records_unlinked = dataset.agent_runs_unlinked;
     counts.nested_agents = roots
         .iter()
         .flat_map(|r| &r.children)
@@ -708,11 +753,31 @@ pub fn analyse(
          of the agent's log; Codex: spawn record, fork id or the copied parent history, the \
          weakest). Project name and time never link."
             .to_owned(),
-        "The logs hold no run time. A run is a stretch of requests less than an hour apart; its \
-         length is first to last request and still contains waiting, and a run of one request \
-         has no observed length. Overlap is a reason to look, not a conflict."
+        "A run is a stretch of requests less than an hour apart; its length is first to last \
+         request and still contains waiting, and a run of one request has no observed length. \
+         Overlap is a reason to look, not a conflict."
             .to_owned(),
     ];
+    if counts.agents_with_logged_run > 0 {
+        notes.push(format!(
+            "{} of {} agents have a run time in the log: the wall time of each finished run, \
+             waiting included, added up per agent. Sums over agents are not elapsed time, since \
+             agents can run at once. The others have none recorded or readable.",
+            counts.agents_with_logged_run, counts.agents
+        ));
+    } else if counts.agents > 0 {
+        notes.push(
+            "No agent has a run time in the data read; run time stays unknown, it is not zero."
+                .to_owned(),
+        );
+    }
+    if counts.run_records_unlinked > 0 {
+        notes.push(format!(
+            "{} logged run times of background agents name their agent only in the notice text, \
+             which is read with the tool calls: add --tool-calls to assign them.",
+            counts.run_records_unlinked
+        ));
+    }
     if !unassigned.is_empty() {
         notes.push(format!(
             "{} agents have no usable parent chain in the logs: their requests are listed apart \
@@ -899,6 +964,65 @@ mod tests {
         // Direct and delegated usage keep their model mix apart.
         assert_eq!(root.direct.models["m-big"], 2);
         assert_eq!(root.delegated.models["m-small"], 3);
+    }
+
+    #[test]
+    fn logged_run_time_is_added_per_agent_and_unknown_elsewhere() {
+        use crate::model::AgentRun;
+        let run = |agent: &str, end_ms: i64, duration_ms: u64| AgentRun {
+            agent: agent.into(),
+            end_ms,
+            duration_ms,
+        };
+        let mut d = dataset();
+        d.agent_runs = vec![
+            run("a1", 3 * MIN, 60_000),
+            run("a1", 5 * MIN, 30_000),
+            run("gone", 5 * MIN, 1_000),
+        ];
+        d.agent_runs_unlinked = 2;
+        let r = analyse(&d, None, None);
+        let root = r.roots.iter().find(|r| r.session == "s1").unwrap();
+        let child = |agent: &str| {
+            root.children
+                .iter()
+                .find(|c| c.agent.as_deref() == Some(agent))
+                .unwrap()
+        };
+        assert_eq!(
+            (child("a1").logged_runs, child("a1").logged_run_ms),
+            (2, Some(90_000))
+        );
+        assert_eq!(
+            (child("a2").logged_runs, child("a2").logged_run_ms),
+            (0, None)
+        );
+        assert_eq!(
+            (root.agents_with_logged_run, root.logged_run_ms),
+            (1, Some(90_000))
+        );
+        assert_eq!(
+            (
+                r.counts.agents_with_logged_run,
+                r.counts.run_records_unlinked
+            ),
+            (1, 2)
+        );
+        assert!(
+            r.notes
+                .iter()
+                .any(|n| n.contains("add --tool-calls to assign"))
+        );
+
+        // A run that ended before the period is not counted.
+        let later = analyse(&d, None, Some(4 * MIN));
+        let a1 = later
+            .roots
+            .iter()
+            .flat_map(|r| &r.children)
+            .find(|c| c.agent.as_deref() == Some("a1"))
+            .unwrap();
+        assert_eq!((a1.logged_runs, a1.logged_run_ms), (1, Some(30_000)));
     }
 
     #[test]

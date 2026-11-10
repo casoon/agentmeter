@@ -1126,7 +1126,7 @@ fn subagents_without_tool_calls_name_the_missing_data_as_a_limit() {
     assert!(v["sources"][0].get("tool_calls").is_none());
     let text = String::from_utf8(run_dir(&dir, &["--subagents", "--tool-calls"]).stdout).unwrap();
     assert!(text.contains("SUBAGENTS") && text.contains("time only"));
-    assert!(text.contains("The logs hold no run time"));
+    assert!(text.contains("No agent has a run time in the data read"));
     for line in text.lines() {
         assert!(line.chars().count() <= 88, "{line}");
     }

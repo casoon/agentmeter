@@ -81,8 +81,10 @@ whatever else changed in that time; it says nothing about cause or about the qua
 up to the summary's: direct requests of sessions, requests of agents whose named parents lead to
 a session (nested agents count once, under their root), and requests of agents without a named
 parent. Parents come from the logs only; project and time never link. Overlap is computed from
-runs of requests less than an hour apart and says nothing about run time (the logs hold none) or
-about conflicting work. A shared read or write (with `--tool-calls`, not for Codex) is a reason to
+runs of requests less than an hour apart and says nothing about conflicting work. Where Claude
+Code logs the duration of a finished agent run, the report shows it per agent: wall time with
+waiting, known for foreground agents and, with `--tool-calls`, for background agents; unknown
+elsewhere and for Codex, never zero. A shared read or write (with `--tool-calls`, not for Codex) is a reason to
 check. The report states evidence (log file per agent) and counter-examples (agents that read
 other lines of a file, time-only overlaps, expected overlap of a session and its own agent); it
 makes no claim that delegation is inefficient or that parallel work saves time.

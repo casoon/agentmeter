@@ -364,6 +364,8 @@ and `notes` says so.
 - `nested_agents` — assigned agents at depth 2 or more.
 - `max_depth` — the longest chain of named parents from a session, `0` without agents.
 - `unassigned_agents` — agents without a usable parent chain.
+- `agents_with_logged_run` — agents with at least one finished run whose duration the log records.
+- `run_records_unlinked` — logged run durations of background agents that name their agent only in the notice text; that text is read with `--tool-calls`, without it they stay unassigned.
 - `overlaps_delegation` — overlapping pairs where one is an ancestor of the other by named parents.
 - `overlaps_same_task` — overlapping agents of one session that are not ancestor and descendant.
 - `overlaps_time_only` — overlapping pairs the logs do not relate in any way.
@@ -392,9 +394,11 @@ the same period. Inclusive sums (`roots[].inclusive_input`) are derived and neve
 - `first` — first request of session or agents.
 - `last` — last request of session or agents.
 - `span_ms` — last minus first request.
-- `active_ms` — the lengths of the runs added up. The logs hold no run time: a run is a stretch of requests less than an hour apart, its length is first to last request and still contains waiting, and a run of one request has no observed length.
+- `active_ms` — the lengths of the runs added up. A run is a stretch of requests less than an hour apart, its length is first to last request and still contains waiting, and a run of one request has no observed length.
 - `paused_ms` — gaps of an hour or more between runs; `active_ms + paused_ms = span_ms`.
 - `runs` — number of runs.
+- `agents_with_logged_run` — assigned agents with a logged run time.
+- `logged_run_ms` — their `logged_run_ms` added up; agents can run at once, so this is not elapsed time. `null` when no agent has one.
 - `shared_reads` — areas (file and line range) read by two or more streams of the session; `null` when not measurable.
 - `shared_reads_other_ranges` — files read by two or more streams but never the same lines (counter-example); `null` when not measurable.
 - `shared_writes` — files written by two or more streams; a reason to check, not a conflict; `null` when not measurable.
@@ -425,6 +429,8 @@ The same fields describe `delegated`, `totals.direct`, `totals.delegated`, `tota
 - `file` — the agent's log file, the evidence.
 - `first` — its first request.
 - `last` — its last request.
+- `logged_runs` — finished runs of the agent in the period whose duration the log records (Claude Code); `0` for Codex and where none is recorded.
+- `logged_run_ms` — those durations added up: the wall time of each run from start to end as Claude Code logs it, waiting included. Recorded with the result of an agent that ran in the foreground, and for a background agent with the notice of its end, which names the agent only in its text (read with `--tool-calls`). `null` when no run is recorded: unknown, not zero.
 - `usage` — its usage, with the fields of `roots[].direct`.
 
 ### `sources[].subagents.overlaps[]`

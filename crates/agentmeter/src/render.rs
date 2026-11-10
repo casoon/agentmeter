@@ -621,6 +621,20 @@ fn subagents_text(r: &agentmeter_core::subagents::SubagentReport, style: Style) 
             "    ",
             4,
         );
+        if let Some(ms) = root.logged_run_ms {
+            out += &wrap(
+                style,
+                &format!(
+                    "logged run time of {} of {} agents: {} added up (waiting included; agents can run at once)",
+                    count(root.agents_with_logged_run),
+                    count(root.agents),
+                    duration(ms as i64)
+                ),
+                "    ",
+                "    ",
+                4,
+            );
+        }
         if let Some(s) = &root.start_context {
             out += &wrap(
                 style,
@@ -657,13 +671,23 @@ fn subagents_text(r: &agentmeter_core::subagents::SubagentReport, style: Style) 
             out += &wrap(
                 style,
                 &format!(
-                    "agent {} (depth {}, parent {} via {}): {} requests, input {}",
+                    "agent {} (depth {}, parent {} via {}): {} requests, input {}{}",
                     child.agent.as_deref().unwrap_or("unknown"),
                     child.depth.map_or("?".to_owned(), |d| d.to_string()),
                     child.parent.as_deref().unwrap_or("unknown"),
                     child.parent_basis.unwrap_or("-"),
                     count(child.usage.requests),
-                    tokens(child.usage.input)
+                    tokens(child.usage.input),
+                    child.logged_run_ms.map_or(String::new(), |ms| format!(
+                        ", logged run time {} in {} {}",
+                        duration(ms as i64),
+                        count(child.logged_runs),
+                        if child.logged_runs == 1 {
+                            "run"
+                        } else {
+                            "runs"
+                        }
+                    ))
                 ),
                 "    · ",
                 "      ",

@@ -10,6 +10,7 @@ behaviour.
 ### Added
 
 - **CLI:** `--report overview|changes|waste|start|ai` answers one question with several analyses at once, so the single options need not be known; `--help` lists the reports first. Details: [Usage](https://github.com/casoon/agentmeter#usage).
+- **CLI:** `--subagents` shows the run time Claude Code logs for a finished agent run, per agent and added up per session (JSON `logged_runs`, `logged_run_ms`). It is wall time with waiting; background agents are assigned with `--tool-calls`, and an agent without a record stays unknown. Details: [Subagents](https://github.com/casoon/agentmeter#subagents---subagents).
 
 ### Changed
 
