@@ -10,6 +10,8 @@ behaviour.
 ### Changed
 
 - **CLI:** reading the logs shows a progress bar on stderr per source once it takes longer than a second, so the menu and the reports no longer wait on an empty screen with large logs. Nothing is shown when stderr is not a terminal.
+- **CLI:** the text output marks every state with one set of symbols: `➜` for a lever or an observed rule, `ℹ` to look at, `✔` fine or nothing to report, `⊝` not measurable, and `⚠` / `✖` for notes and problems while reading. They replace `◆`, `?`, `✓`, `·`, `!` and `✗`; the JSON output is unchanged.
+- **CLI:** on a terminal the log file of an evidence line is a link that opens the file. Pipes and `NO_COLOR` get the plain path as before.
 
 ## [0.3.0] - 2026-11-10
 

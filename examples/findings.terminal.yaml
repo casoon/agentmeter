@@ -22,26 +22,26 @@ steps:
 
         \e[1;96mREAD\e[0m
 
-        \  \e[1;92m✓\e[0m logs      6 files, 72 lines from demo-logs/projects · version 2.1.309
+        \  \e[1;92m✔\e[0m logs      6 files, 72 lines from demo-logs/projects · version 2.1.309
 
-        \  \e[1;92m✓\e[0m observed  2026-10-28T09:00:05Z – 2026-10-28T14:22:05Z · 36 requests in all
+        \  \e[1;92m✔\e[0m observed  2026-10-28T09:00:05Z – 2026-10-28T14:22:05Z · 36 requests in all
 
-        \  \e[1;92m✓\e[0m quality   every line readable
+        \  \e[1;92m✔\e[0m quality   every line readable
 
-        \  \e[1;92m✓\e[0m rules     5 of 5 measurable in this source
+        \  \e[1;92m✔\e[0m rules     5 of 5 measurable in this source
 
-        \  \e[1;92m✓\e[0m probe     /context in 1 of 1 places (empty directory); answered locally, no model
+        \  \e[1;92m✔\e[0m probe     /context in 1 of 1 places (empty directory); answered locally, no model
 
         \              request · claude -p /context --no-session-persistence --output-format json
 
 
-        \e[1;96mFINDINGS\e[0m   \e[1;93m◆ 1 lever\e[0m   \e[36m? 1 to look at\e[0m   \e[1;92m✓ 3 nothing found\e[0m
+        \e[1;96mFINDINGS\e[0m   \e[1;93m➜ 1 lever\e[0m   \e[36mℹ 1 to look at\e[0m   \e[1;92m✔ 3 nothing found\e[0m
 
         \e[2m────────────────────────────────────────────────────────────────────────────────────────
 
         \e[0m
 
-        \e[1;93m◆ cache-rebuild\e[0m                                             \e[2mlever · info · observed · v1\e[0m
+        \e[1;93m➜ cache-rebuild\e[0m                                             \e[2mlever · info · observed · v1\e[0m
 
         \  ⇒ \e[1ma 1 h cache lifetime for the main conversation (promptCacheTtl) would have
 
@@ -102,7 +102,7 @@ steps:
         \              sub-agent file that pauses for minutes usually waits on a long tool run
 
 
-        \e[36m? baseline-load\e[0m                                      \e[2mlook at it · notice · observed · v1\e[0m
+        \e[36mℹ baseline-load\e[0m                                      \e[2mlook at it · notice · observed · v1\e[0m
 
         \  ⇒ \e[1mtoday's configuration is 33k of the median start 81k (41 %); 39k more is in
 
@@ -172,15 +172,15 @@ steps:
         \              /context in a session lists every tool, skill and memory file
 
 
-        \e[1;92m✓\e[0m compact-thrash  \e[2mnothing to report: no automatic compaction pair in the period
+        \e[1;92m✔\e[0m compact-thrash  \e[2mnothing to report: no automatic compaction pair in the period
 
         \                  (v1)\e[0m
 
-        \e[1;92m✓\e[0m big-context     \e[2mnothing to report: 0 of 36 requests above 500k (0.0 % of tokens,
+        \e[1;92m✔\e[0m big-context     \e[2mnothing to report: 0 of 36 requests above 500k (0.0 % of tokens,
 
         \                  below 10 %); largest context 209k (v2)\e[0m
 
-        \e[1;92m✓\e[0m long-session    \e[2mnothing to report: 0 of 6 sessions span more than 24 h (longest
+        \e[1;92m✔\e[0m long-session    \e[2mnothing to report: 0 of 6 sessions span more than 24 h (longest
 
         \                  0.4 h) (v1)\e[0m\n"
     delay: 3

@@ -79,12 +79,12 @@ and entry types.
 
 ```
 READ
-  ✓ logs      1,299 files, 855,776 lines from ~/.claude/projects
-  ✓ probe     /context in 4 of 4 places; answered locally, no model request
+  ✔ logs      1,299 files, 855,776 lines from ~/.claude/projects
+  ✔ probe     /context in 4 of 4 places; answered locally, no model request
 
-FINDINGS   ? 3 to look at   ✓ 1 fine   ✓ 1 nothing found
+FINDINGS   ℹ 3 to look at   ✔ 1 fine   ✔ 1 nothing found
 
-? cache-rebuild                                      look at it · notice · observed · v1
+ℹ cache-rebuild                                      look at it · notice · observed · v1
   ⇒ 202 rebuilds (60.1 M) are in sub-agent files, which wrote 100 % of their caches with
     5 min while the main conversation wrote 100 % with 1 h; …
 
@@ -92,7 +92,7 @@ FINDINGS   ? 3 to look at   ✓ 1 fine   ✓ 1 nothing found
     5 min expired, main session    ························       0  0 rebuilds
     5 min expired, sub-agents      ████████████████████████  60.1 M  202 rebuilds
 
-? baseline-load                                      look at it · notice · observed · v1
+ℹ baseline-load                                      look at it · notice · observed · v1
   ⇒ today's configuration is 34k of the median start 79k (43 %); 34k more is in every
     start (front end, project instructions, a short first prompt) and 11k varies per
     session; 146 of 146 starts came from claude-desktop, …

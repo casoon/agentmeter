@@ -1,19 +1,19 @@
 agentmeter · Claude Code · last 7 days
 
 READ
-  ✓ logs      1,299 files, 856,227 lines from ~/.claude/projects · version
+  ✔ logs      1,299 files, 856,227 lines from ~/.claude/projects · version
               2.1.170 – 2.1.309
-  ✓ observed  2026-06-14T17:33:36Z – 2026-10-30T19:35:35Z · 130,425 requests in all
-  ✓ quality   every line readable
-  ✓ rules     5 of 5 measurable in this source
-  ✓ probe     /context in 4 of 4 places (empty directory, web-casoon-dev, kestrel,
+  ✔ observed  2026-06-14T17:33:36Z – 2026-10-30T19:35:35Z · 130,425 requests in all
+  ✔ quality   every line readable
+  ✔ rules     5 of 5 measurable in this source
+  ✔ probe     /context in 4 of 4 places (empty directory, web-casoon-dev, kestrel,
               chartlet); answered locally, no model request · claude -p /context
               --no-session-persistence --output-format json
 
-FINDINGS   ? 3 to look at   ✓ 1 fine   ✓ 1 nothing found
+FINDINGS   ℹ 3 to look at   ✔ 1 fine   ✔ 1 nothing found
 ────────────────────────────────────────────────────────────────────────────────────────
 
-? baseline-load                                      look at it · notice · observed · v1
+ℹ baseline-load                                      look at it · notice · observed · v1
   ⇒ today's configuration is 34k of the median start 79k (43 %); 34k more is in every
     start (front end, project instructions, a short first prompt) and 11k varies per
     session; 146 of 146 starts came from claude-desktop, whose own instructions and
@@ -39,7 +39,7 @@ FINDINGS   ? 3 to look at   ✓ 1 fine   ✓ 1 nothing found
     memory files: ~/.claude/CLAUDE.md 1k
     in the project directory: web-casoon-dev +4k · kestrel +8k · chartlet +400
 
-? cache-rebuild                                      look at it · notice · observed · v1
+ℹ cache-rebuild                                      look at it · notice · observed · v1
   ⇒ 202 rebuilds (60.1 M) are in sub-agent files, which wrote 100 % of their caches with
     5 min while the main conversation wrote 100 % with 1 h; the log does not show
     whether a setting reaches sub-agents; 147 of 349 unexpected rebuilds (42.4 M) follow
@@ -51,7 +51,7 @@ FINDINGS   ? 3 to look at   ✓ 1 fine   ✓ 1 nothing found
     cause unknown                  ························       0  0 rebuilds
     expected (model, compaction)   ▌·······················   1.2 M  3 rebuilds
 
-? long-session                                         look at it · info · observed · v1
+ℹ long-session                                         look at it · info · observed · v1
   ⇒ 22 sessions ran over a day, idle time included; only a change of topic inside one
     makes a fresh session worth it, and the log does not show topics
 
@@ -59,7 +59,7 @@ FINDINGS   ? 3 to look at   ✓ 1 fine   ✓ 1 nothing found
     auditmysite · 1dadfa98         ██████████████████▏·····   117 h  116 requests
     astro-site-files · 0f91e74f    ██████████████████······   116 h  389 requests
 
-✓ big-context                                              fine · notice · observed · v2
+✔ big-context                                              fine · notice · observed · v2
   ⇒ cheap while cached: 98 % of these tokens were cache reads; 39 % of these tokens sit
     in 3 of 22 sessions; whether that length helped the task the log cannot show
 
@@ -68,5 +68,5 @@ FINDINGS   ? 3 to look at   ✓ 1 fine   ✓ 1 nothing found
     kestrel · 3ad3ed6b             ████▏···················   227 M  316 requests
     19 other sessions              ████████████████████████  1.32 G  2,076 requests
 
-✓ compact-thrash  nothing to report: 0 of 15 automatic compaction pairs came with under
+✔ compact-thrash  nothing to report: 0 of 15 automatic compaction pairs came with under
                   100k of context growth (v1)
