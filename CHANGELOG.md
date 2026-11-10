@@ -7,6 +7,8 @@ behaviour.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-10
+
 ### Added
 
 - **CLI:** `--report overview|changes|waste|start|ai` answers one question with several analyses at once, so the single options need not be known; `--help` lists the reports first. Details: [Usage](https://github.com/casoon/agentmeter#usage).
