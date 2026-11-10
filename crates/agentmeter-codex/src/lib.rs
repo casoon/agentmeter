@@ -11,7 +11,8 @@
 //! The format is not documented. Reading is tolerant: unreadable lines, unknown entry types and
 //! unknown usage fields are counted, never fatal; message content is never opened. Compressed
 //! rollouts (`.jsonl.zst`) are streamed through ruzstd with a window and an output limit; damaged
-//! ones are counted, never fatal.
+//! ones are counted, never fatal. They are decompressed on several threads, which hand on only
+//! the lines that carry something; every line is still applied in the order of the files.
 
 pub mod instructions;
 mod raw;
@@ -21,11 +22,13 @@ use agentmeter_core::time::parse_iso_ms;
 use agentmeter_core::toolcalls::{ToolData, ToolEvent, ToolKind, ToolStats, ToolStatus};
 use raw::{RawCompacted, RawEvent, RawItem, RawLine, RawMeta, RawTokens, RawTurnContext};
 use ruzstd::decoding::{FrameDecoder, StreamingDecoder};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::ffi::{OsStr, OsString};
 use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
+use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
+use std::sync::{Condvar, Mutex};
 
 /// Entry types that carry no usage and are expected in rollouts; anything else is counted as
 /// unknown so format drift shows up in the report.
@@ -91,6 +94,145 @@ impl<R: BufRead> Read for ZstdFrames<R> {
     }
 }
 
+/// Most threads that decompress at once.
+const MAX_DECODERS: usize = 8;
+/// Compressed files that may be started ahead of the one being applied.
+const FILES_AHEAD: usize = 64;
+/// Size at which a decoder hands on the lines it kept, and how many such parts may wait.
+const PART_BYTES: usize = 64 * 1024;
+const PARTS_WAITING: usize = 16;
+
+/// What a decoder says about one compressed file, in this order: how it opened, the lines that
+/// carry something, the end.
+enum Part {
+    Missing,
+    Unreadable,
+    Opened,
+    /// Whole lines, each ending in a line break.
+    Lines(Vec<u8>),
+    End {
+        dropped: Dropped,
+        /// The stream broke off: damaged or over a limit.
+        broken: bool,
+    },
+}
+
+/// The lines a decoder did not hand on, as the counters they would have changed.
+#[derive(Default)]
+struct Dropped {
+    lines: u64,
+    skipped_lines: u64,
+    unknown_types: HashMap<String, u64>,
+}
+
+/// The compressed files not yet started, in reading order, and how far the reading is.
+struct Queue {
+    jobs: VecDeque<(PathBuf, SyncSender<Part>)>,
+    started: usize,
+    applied: usize,
+}
+
+/// Takes compressed files off the queue until it is empty, never more than [`FILES_AHEAD`]
+/// before the file being applied.
+fn decode_queue(queue: &Mutex<Queue>, moved: &Condvar, tools: bool) {
+    loop {
+        let (path, parts) = {
+            let mut queue = queue.lock().expect("queue lock");
+            while !queue.jobs.is_empty() && queue.started >= queue.applied + FILES_AHEAD {
+                queue = moved.wait(queue).expect("queue lock");
+            }
+            let Some(job) = queue.jobs.pop_front() else {
+                return;
+            };
+            queue.started += 1;
+            job
+        };
+        // A send fails only when the reader has gone; the result is not needed then.
+        let _ = decode(&path, tools, &parts);
+    }
+}
+
+/// Decompresses one rollout and hands on the lines the reader acts on: the first one, session
+/// facts, usage and compactions, with `tools` also every `response_item`. The others are counted.
+fn decode(
+    path: &Path,
+    tools: bool,
+    parts: &SyncSender<Part>,
+) -> Result<(), std::sync::mpsc::SendError<Part>> {
+    let Ok(file) = File::open(path) else {
+        return parts.send(Part::Missing);
+    };
+    let Ok(frames) = ZstdFrames::new(BufReader::new(file)) else {
+        return parts.send(Part::Unreadable);
+    };
+    parts.send(Part::Opened)?;
+    let mut reader = BufReader::new(frames.take(MAX_DECOMPRESSED_BYTES));
+    let mut dropped = Dropped::default();
+    let mut kept = Vec::new();
+    let mut buffer = Vec::new();
+    let mut first = true;
+    let mut broken = false;
+    loop {
+        buffer.clear();
+        match reader.read_until(b'\n', &mut buffer) {
+            Ok(0) => break,
+            Ok(_) => {}
+            Err(_) => {
+                broken = true;
+                break;
+            }
+        }
+        if buffer.iter().all(u8::is_ascii_whitespace) {
+            continue;
+        }
+        let Ok(line) = serde_json::from_slice::<RawLine>(&buffer) else {
+            dropped.lines += 1;
+            dropped.skipped_lines += 1;
+            continue;
+        };
+        let keep = first
+            || match line.kind.as_deref() {
+                Some("session_meta" | "turn_context" | "compacted") => true,
+                Some("event_msg") => token_count_info(&line).is_some(),
+                Some("response_item") => tools,
+                _ => false,
+            };
+        first = false;
+        if !keep {
+            dropped.lines += 1;
+            if let Some(kind) = unknown_type(&line) {
+                *dropped.unknown_types.entry(kind.to_owned()).or_default() += 1;
+            }
+            continue;
+        }
+        kept.extend_from_slice(&buffer);
+        if !kept.ends_with(b"\n") {
+            kept.push(b'\n');
+        }
+        if kept.len() >= PART_BYTES {
+            parts.send(Part::Lines(std::mem::take(&mut kept)))?;
+        }
+    }
+    parts.send(Part::Lines(kept))?;
+    parts.send(Part::End { dropped, broken })
+}
+
+/// The usage of an `event_msg` line, if it is a `token_count` with one.
+fn token_count_info(line: &RawLine) -> Option<raw::RawInfo> {
+    payload::<RawEvent>(line)
+        .filter(|event| event.kind.as_deref() == Some("token_count"))
+        .and_then(|event| event.info)
+}
+
+/// The name under which a line's type is counted as unknown, if it is not a known one.
+fn unknown_type<'a>(line: &'a RawLine) -> Option<&'a str> {
+    match line.kind.as_deref() {
+        Some(kind) if KNOWN_TYPES.contains(&kind) => None,
+        Some(kind) => Some(kind),
+        None => Some("(none)"),
+    }
+}
+
 /// Directories inside the Codex home that hold rollouts.
 const ROLLOUT_DIRS: &[&str] = &["sessions", "archived_sessions"];
 
@@ -139,8 +281,9 @@ pub fn read_with_progress(
         })
         .collect();
     let total = per_home.iter().map(|(_, files)| files.len() as u64).sum();
-    let mut done = 0;
-    progress(done, total);
+    // What to do with each file, in reading order; the compressed ones also go to the decoders.
+    let mut plan: Vec<(&PathBuf, PathBuf, Option<Receiver<Part>>, bool)> = Vec::new();
+    let mut jobs = VecDeque::new();
     for (home, files) in per_home {
         // A rollout that exists in plain text and compressed is read once: the plain one wins.
         let plain: HashSet<OsString> = files
@@ -149,15 +292,46 @@ pub fn read_with_progress(
             .filter_map(|f| f.file_name().map(OsStr::to_os_string))
             .collect();
         for file in files {
-            if is_compressed(&file) && plain.contains(&uncompressed_name(&file)) {
+            let shadowed = is_compressed(&file) && plain.contains(&uncompressed_name(&file));
+            let parts = (is_compressed(&file) && !shadowed).then(|| {
+                let (sender, receiver) = sync_channel(PARTS_WAITING);
+                jobs.push_back((file.clone(), sender));
+                receiver
+            });
+            plan.push((home, file, parts, shadowed));
+        }
+    }
+    let decoders = std::thread::available_parallelism()
+        .map_or(1, usize::from)
+        .min(MAX_DECODERS)
+        .min(jobs.len());
+    let queue = Mutex::new(Queue {
+        jobs,
+        started: 0,
+        applied: 0,
+    });
+    let moved = Condvar::new();
+    let mut done = 0;
+    progress(done, total);
+    std::thread::scope(|scope| {
+        for _ in 0..decoders {
+            scope.spawn(|| decode_queue(&queue, &moved, tools));
+        }
+        for (home, file, parts, shadowed) in plan {
+            let compressed = parts.is_some();
+            if shadowed {
                 reader.stats.compressed_files_shadowed += 1;
             } else {
-                reader.read_file(home, &file);
+                reader.read_file(home, &file, parts);
+            }
+            if compressed {
+                queue.lock().expect("queue lock").applied += 1;
+                moved.notify_all();
             }
             done += 1;
             progress(done, total);
         }
-    }
+    });
     let tool_data = reader.tool_data();
     (reader.finish(), tool_data)
 }
@@ -267,22 +441,24 @@ struct Reader {
 }
 
 impl Reader {
-    fn read_file(&mut self, home: &Path, path: &Path) {
-        let compressed = is_compressed(path);
-        let Ok(file) = File::open(path) else {
-            return;
-        };
-        let input: Box<dyn Read> = if compressed {
-            match ZstdFrames::new(BufReader::new(file)) {
-                Ok(frames) => Box::new(frames.take(MAX_DECOMPRESSED_BYTES)),
-                Err(_) => {
+    /// Reads one file: a plain one from disk, a compressed one from the `parts` of its decoder.
+    fn read_file(&mut self, home: &Path, path: &Path, parts: Option<Receiver<Part>>) {
+        let compressed = parts.is_some();
+        let mut plain = None;
+        match &parts {
+            Some(parts) => match parts.recv() {
+                Ok(Part::Opened) => {}
+                Ok(Part::Unreadable) => {
                     self.stats.compressed_files_unreadable += 1;
                     return;
                 }
-            }
-        } else {
-            Box::new(file)
-        };
+                _ => return,
+            },
+            None => match File::open(path) {
+                Ok(file) => plain = Some(file),
+                Err(_) => return,
+            },
+        }
         self.stats.files += 1;
         self.stats.compressed_files_read += u64::from(compressed);
         let source = self.files.len();
@@ -304,58 +480,32 @@ impl Reader {
             project: "unknown".to_owned(),
             ..FileFacts::default()
         };
-        let mut reader = BufReader::new(input);
-        let mut buffer = Vec::new();
-        loop {
-            buffer.clear();
-            match reader.read_until(b'\n', &mut buffer) {
-                Ok(0) => break,
-                Ok(_) => {}
-                Err(_) => {
+        for part in parts.into_iter().flatten() {
+            match part {
+                Part::Lines(lines) => {
+                    for line in lines.split(|byte| *byte == b'\n') {
+                        self.read_line(line, source, &mut facts);
+                    }
+                }
+                Part::End { dropped, broken } => {
+                    self.stats.lines += dropped.lines;
+                    self.stats.skipped_lines += dropped.skipped_lines;
+                    for (kind, n) in dropped.unknown_types {
+                        *self.stats.unknown_types.entry(kind).or_default() += n;
+                    }
                     // A damaged or oversized compressed stream: keep what was read, say so.
-                    self.stats.compressed_files_unreadable += u64::from(compressed);
-                    break;
+                    self.stats.compressed_files_unreadable += u64::from(broken);
                 }
+                Part::Missing | Part::Unreadable | Part::Opened => {}
             }
-            if buffer.iter().all(u8::is_ascii_whitespace) {
-                continue;
-            }
-            self.stats.lines += 1;
-            let Ok(line) = serde_json::from_slice::<RawLine>(&buffer) else {
-                self.stats.skipped_lines += 1;
-                continue;
-            };
-            if facts.first_is_meta.is_none() {
-                facts.first_is_meta = Some(line.kind.as_deref() == Some("session_meta"));
-            }
-            match line.kind.as_deref() {
-                Some("session_meta") => self.session_meta(&line, &mut facts),
-                Some("turn_context") => {
-                    if let Some(context) = payload::<RawTurnContext>(&line) {
-                        facts.model = context.model.unwrap_or_default();
-                    }
-                }
-                Some("event_msg") => {
-                    if let Some(event) = payload::<RawEvent>(&line)
-                        && event.kind.as_deref() == Some("token_count")
-                        && let Some(info) = event.info
-                    {
-                        self.token_count(&line, info, source, &mut facts);
-                    }
-                }
-                Some("compacted") => self.compacted(&line, source, &facts),
-                Some("response_item") if self.collect_tools => {
-                    self.tool_item(&line, source, &facts);
-                }
-                Some(kind) if KNOWN_TYPES.contains(&kind) => {}
-                Some(kind) => *self.stats.unknown_types.entry(kind.to_owned()).or_default() += 1,
-                None => {
-                    *self
-                        .stats
-                        .unknown_types
-                        .entry("(none)".to_owned())
-                        .or_default() += 1
-                }
+        }
+        if let Some(file) = plain {
+            let mut reader = BufReader::new(file);
+            let mut buffer = Vec::new();
+            // A plain file that stops being readable ends here, with what was read.
+            while reader.read_until(b'\n', &mut buffer).is_ok_and(|n| n > 0) {
+                self.read_line(&buffer, source, &mut facts);
+                buffer.clear();
             }
         }
         self.stats.files_without_usage += u64::from(facts.usage_events == 0);
@@ -389,6 +539,50 @@ impl Reader {
                 cwd: facts.cwd.take(),
                 parent: facts.parent.take(),
             });
+        }
+    }
+
+    /// Applies one line of a rollout; a blank one is passed over.
+    fn read_line(&mut self, buffer: &[u8], source: usize, facts: &mut FileFacts) {
+        if buffer.iter().all(u8::is_ascii_whitespace) {
+            return;
+        }
+        self.stats.lines += 1;
+        let Ok(line) = serde_json::from_slice::<RawLine>(buffer) else {
+            self.stats.skipped_lines += 1;
+            return;
+        };
+        if facts.first_is_meta.is_none() {
+            facts.first_is_meta = Some(line.kind.as_deref() == Some("session_meta"));
+        }
+        match line.kind.as_deref() {
+            Some("session_meta") => self.session_meta(&line, facts),
+            Some("turn_context") => {
+                if let Some(context) = payload::<RawTurnContext>(&line) {
+                    facts.model = context.model.unwrap_or_default();
+                }
+            }
+            Some("event_msg") => {
+                if let Some(event) = payload::<RawEvent>(&line)
+                    && event.kind.as_deref() == Some("token_count")
+                    && let Some(info) = event.info
+                {
+                    self.token_count(&line, info, source, facts);
+                }
+            }
+            Some("compacted") => self.compacted(&line, source, facts),
+            Some("response_item") if self.collect_tools => {
+                self.tool_item(&line, source, facts);
+            }
+            Some(kind) if KNOWN_TYPES.contains(&kind) => {}
+            Some(kind) => *self.stats.unknown_types.entry(kind.to_owned()).or_default() += 1,
+            None => {
+                *self
+                    .stats
+                    .unknown_types
+                    .entry("(none)".to_owned())
+                    .or_default() += 1
+            }
         }
     }
 
