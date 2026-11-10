@@ -8,8 +8,9 @@ agentmeter reads the session logs that coding agents already write to your disk 
 your usage: numbers from your own logs, each with the evidence behind it and a concrete next
 step to check. It targets **Claude Code** and **Codex CLI**.
 
-**Status:** early development. Nothing is released yet; readers for Claude Code and Codex work,
-parts of this documentation (menu, configuration check, budget) describe planned behaviour.
+**Status:** early development (0.x), released on crates.io and as signed binaries on the GitHub
+releases. Output, JSON shape and rule definitions may change between minor versions; the
+changelog lists every change.
 
 ## What it reports
 
@@ -17,13 +18,36 @@ parts of this documentation (menu, configuration check, budget) describe planned
 - Sessions and projects that account for most of the input.
 - [Findings](reference/findings/): observations and hints from rules over the same data, such as
   large contexts, cache rebuilds and the size of the first request. Each states how sure it is.
-- A data-quality section: observed period, files without usage, unreadable entries, unknown models.
+- A data-quality section: observed period, days without requests inside it, files without usage,
+  unreadable entries, unknown models.
+
+## Analyses you ask for
+
+Each of these is a flag of its own; without it nothing of it is read or computed.
+
+- `--compare <Nd>`, `--changed-on <date>` and captures (`--capture`, `--compare-captures`): two
+  periods side by side with both values, the change and the denominators. Changes, not causes.
+- `--transitions`: a timeline of session starts, resumes, compactions and pauses.
+- `--subagents`: usage of a session's own requests next to that of the agents it delegated to.
+- `--compaction-causes` and `--compaction-settings`: compactions by project, model and session,
+  next to today's compaction settings.
+- `--retention`: the age of the oldest request next to Claude Code's log retention.
+- `--tool-calls`: repeated reads of the same file area, identical failed calls, very large outputs.
+- `--instructions <dir>`: the instruction files that apply to a directory, with size and load state.
+- `--skills`: installed Claude Code skills that were called, and those that were not observed.
+- `--ai-report`: the findings condensed to one line of JSON for an AI to evaluate.
+
+The fields of each are in the [JSON reference](reference/json/).
 
 ## Privacy
 
-agentmeter only reads usage fields: token counts, timestamps, model, session and project ids and
-compaction events. It does not read prompts or file contents, does not touch the network and
-sends no telemetry.
+By default agentmeter extracts only usage fields: token counts, timestamps, model, session and
+project ids and compaction events. `--tool-calls` and `--skills` also open message content, and
+keep only call ids, tool and skill names, file paths, a fingerprint of commands and the size of
+results. `--instructions`, `--skills`, `--compaction-settings` and `--retention` read
+configuration files for sizes and settings. No prompt, command, output or file text is kept or
+printed. It does not touch the network and sends no telemetry; only `--probe` starts another
+program, Claude Code itself.
 
 ## Where it stops
 

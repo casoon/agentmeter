@@ -39,6 +39,8 @@ const heroFindings = findingsLines
 const usage = `agentmeter                      # menu on a terminal
 agentmeter --findings           # rules with measure, evidence and next step
 agentmeter --tool codex --since 7d
+agentmeter --compare 7d         # the last 7 days next to the 7 before
+agentmeter --tool-calls         # repeated reads and failures, large outputs
 agentmeter --json               # the same data, one entry per source
 agentmeter --check data-quality # exit 1 on unreadable or missing data`;
 ---
@@ -81,7 +83,7 @@ agentmeter --check data-quality # exit 1 on unreadable or missing data`;
       {
         label: 'Privacy',
         title: 'Usage fields only',
-        body: 'No prompts, no file contents, no network access. Only token counts, timestamps, model and session ids.',
+        body: 'No prompt, command or output text is kept, no network access. By default only token counts, timestamps, model and session ids; tool calls and skills are read only when you ask for them.',
         href: url('docs/'),
       },
     ]}
@@ -100,6 +102,10 @@ agentmeter --check data-quality # exit 1 on unreadable or missing data`;
       {
         title: 'Cache rebuilds',
         body: 'Large cache writes after a pause, with the cause marked unknown when the logs do not show it.',
+      },
+      {
+        title: 'Analyses you ask for',
+        body: 'Two periods side by side, a timeline of starts, compactions and pauses, sub-agent usage, repeated tool calls, instruction files and unused skills: each is a flag of its own and reads nothing without it.',
       },
       {
         title: 'Data gaps stated',
