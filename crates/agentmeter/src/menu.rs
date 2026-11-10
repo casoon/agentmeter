@@ -1,26 +1,19 @@
 //! The interactive menu: a terminal front end over the same analysis the text output uses.
 //!
 //! The menu is a model first ([`model`]: sections and rows as plain data, testable without a
-//! terminal) and a thin layer that hands the rows to `runemark`. Choosing a row prints the
-//! existing detail output and returns to the menu.
+//! terminal) and a thin layer that hands the rows to `runemark`. The rows are the reports of
+//! `--report`: a question each, answered by several analyses at once. Choosing one prints what
+//! the command line would print and returns to the menu.
 
-use crate::cli::{Options, Since, Tool};
-use crate::render::{self, Report, Style};
-use crate::{Analysis, Source, analyse, period_label, run_probe};
+use crate::cli::{Bundle, Options, Since, Tool};
+use crate::render::{self, Style};
+use crate::{Analysis, Source, analyse, analyse_all, period_label, read_sources_with, run_probe};
 use agentmeter_core::format::{count, tokens};
 use agentmeter_core::model::Probe;
 use runemark::{ColorMode, Console, ErrorBlock, Group, Hint, Item, Menu, Outcome, SelectMode};
 use std::io::{self, BufRead, Write};
+use std::path::Path;
 use std::process::ExitCode;
-
-/// The rules, in the order the findings are listed.
-const RULES: &[&str] = &[
-    "baseline-load",
-    "cache-rebuild",
-    "compact-thrash",
-    "big-context",
-    "long-session",
-];
 
 /// The periods the menu offers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -36,6 +29,14 @@ impl Period {
             Period::Days7 => Period::Days30,
             Period::Days30 => Period::All,
             Period::All => Period::Days7,
+        }
+    }
+
+    /// The days "What changed?" puts next to the days before; all logs have no such length.
+    pub fn compare_days(self) -> i64 {
+        match self {
+            Period::Days30 => 30,
+            Period::Days7 | Period::All => 7,
         }
     }
 
@@ -81,14 +82,6 @@ fn per_source(views: &[View], text: impl Fn(&View) -> String) -> String {
         .join(" · ")
 }
 
-fn status_words(status: &str) -> &'static str {
-    match status {
-        "observed" => "observed",
-        "checked_none" => "none",
-        _ => "n/a",
-    }
-}
-
 /// How many kinds of notes the data quality of a source has to show.
 fn data_notes(a: &Analysis) -> usize {
     let r = &a.quality.read;
@@ -108,76 +101,35 @@ fn data_notes(a: &Analysis) -> usize {
     .count()
 }
 
-/// The menu as data: OVERVIEW, FINDINGS (one row per rule) and DATA (one row per source).
-pub fn model(views: &[View]) -> Vec<Section> {
-    let row = |id: &str, label: &str, description: String| Row {
-        id: id.to_owned(),
-        label: label.to_owned(),
+/// The menu as data: REPORTS (one row per question) and DATA (one row per source).
+pub fn model(views: &[View], period: Period) -> Vec<Section> {
+    let row = |id: String, label: String, description: String| Row {
+        id,
+        label,
         description,
     };
-    let overview = vec![
-        row(
-            "summary",
-            "Summary",
-            if views.len() == 1 {
-                match &views[0].analysis.summary {
-                    Some(s) if s.requests > 0 => format!(
-                        "{} requests · {} input · cache {:.0} %",
-                        count(s.requests),
-                        tokens(s.input),
-                        s.cache_read_pct
-                    ),
-                    _ => "no requests in the period".to_owned(),
+    let reports = Bundle::ALL
+        .into_iter()
+        .map(|bundle| {
+            let description = match bundle {
+                Bundle::Overview => overview_words(views),
+                Bundle::Changes => {
+                    let days = period.compare_days();
+                    format!("last {days} days next to the {days} before")
                 }
-            } else {
-                let counts = per_source(views, |v| {
-                    count(v.analysis.summary.as_ref().map_or(0, |s| s.requests))
-                });
-                format!("{counts} requests")
-            },
-        ),
-        row(
-            "sessions",
-            "Sessions",
-            per_source(views, |v| {
-                format!("{}", v.analysis.sessions.as_ref().map_or(0, Vec::len))
-            }),
-        ),
-        row(
-            "projects",
-            "Projects",
-            per_source(views, |v| {
-                format!("{}", v.analysis.projects.as_ref().map_or(0, Vec::len))
-            }),
-        ),
-    ];
-    let mut findings: Vec<Row> = RULES
-        .iter()
-        .map(|rule| {
+                // Asking Claude Code starts a program; the row says so before it is chosen.
+                Bundle::Start if views.iter().any(|v| v.source.tool == "claude") => {
+                    format!("{}, runs claude for /context", bundle.about())
+                }
+                _ => bundle.about().to_owned(),
+            };
             row(
-                &format!("rule:{rule}"),
-                rule,
-                per_source(views, |v| {
-                    v.analysis
-                        .findings
-                        .as_ref()
-                        .and_then(|e| e.rules.iter().find(|r| r.rule == *rule))
-                        .map_or("n/a", |r| status_words(r.status))
-                        .to_owned()
-                }),
+                format!("report:{}", bundle.name()),
+                bundle.title().to_owned(),
+                description,
             )
         })
         .collect();
-    if let Some(claude) = views.iter().find(|v| v.source.tool == "claude") {
-        findings.push(row(
-            "probe",
-            "Context probe",
-            match claude.analysis.probe.as_ref().and_then(|p| p.baseline()) {
-                Some(base) => format!("configuration {} at session start", tokens(base.total)),
-                None => "ask Claude Code /context (runs claude locally, no request)".to_owned(),
-            },
-        ));
-    }
     let data = views
         .iter()
         .map(|v| {
@@ -191,20 +143,16 @@ pub fn model(views: &[View]) -> Vec<Section> {
                 "no analysable data".to_owned()
             };
             row(
-                &format!("data:{}", v.source.tool),
-                &format!("Data · {}", v.source.label),
+                format!("data:{}", v.source.tool),
+                format!("Data · {}", v.source.label),
                 description,
             )
         })
         .collect();
     vec![
         Section {
-            title: "OVERVIEW",
-            rows: overview,
-        },
-        Section {
-            title: "FINDINGS",
-            rows: findings,
+            title: "REPORTS",
+            rows: reports,
         },
         Section {
             title: "DATA",
@@ -213,42 +161,85 @@ pub fn model(views: &[View]) -> Vec<Section> {
     ]
 }
 
-/// The detail output for a row: the text the flags would print.
-fn detail(id: &str, views: &[View], period: &str, style: Style) -> String {
-    let blocks: Vec<String> = views
-        .iter()
-        .filter(|v| {
-            id.strip_prefix("data:")
-                .is_none_or(|tool| tool == v.source.tool)
+/// The overview row: what the period holds, before anything is chosen.
+fn overview_words(views: &[View]) -> String {
+    let observed = |v: &View| {
+        v.analysis.findings.as_ref().map_or(0, |e| {
+            e.rules.iter().filter(|r| r.status == "observed").count()
         })
-        .map(|v| {
-            let a = v.analysis;
-            let report = Report {
-                tool: v.source.tool,
-                label: v.source.label,
-                period: period.to_owned(),
-                project: None,
-                places: &v.source.places,
-                quality: &a.quality,
-                summary: a.summary.as_ref().filter(|_| id == "summary"),
-                sessions: a.sessions.as_deref().filter(|_| id == "sessions"),
-                projects: a.projects.as_deref().filter(|_| id == "projects"),
-                findings: a.findings.as_ref().filter(|_| id.starts_with("rule:")),
-                probe: a.probe.as_ref().filter(|_| id.starts_with("rule:")),
-                instructions: None,
-                tool_calls: None,
-                transitions: None,
-                compare: None,
-                subagents: None,
-                skills: None,
-                compaction_causes: None,
-                before_after: None,
-                retention: None,
-                ai_report: None,
-            };
-            render::text(&report, style)
+    };
+    if views.len() > 1 {
+        let counts = per_source(views, |v| {
+            count(v.analysis.summary.as_ref().map_or(0, |s| s.requests))
+        });
+        return format!("{counts} requests");
+    }
+    match &views[0].analysis.summary {
+        Some(s) if s.requests > 0 => format!(
+            "{} requests · {} input · {} findings",
+            count(s.requests),
+            tokens(s.input),
+            observed(&views[0])
+        ),
+        _ => "no requests in the period".to_owned(),
+    }
+}
+
+/// The options a row stands for: a report with the menu's source and period, or the data
+/// quality alone for a `data:` row.
+fn row_options(id: &str, tool: Tool, period: Period) -> Options {
+    let mut options = Options {
+        since: period.since(),
+        tool,
+        ..Options::default()
+    };
+    let bundle = id
+        .strip_prefix("report:")
+        .and_then(|name| Bundle::ALL.into_iter().find(|b| b.name() == name));
+    if let Some(bundle) = bundle {
+        if bundle == Bundle::Changes {
+            // The comparison sets both periods itself.
+            options.since = None;
+            options.compare = Some(period.compare_days());
+        }
+        options.report = Some(bundle);
+        bundle.apply(&mut options);
+    }
+    options
+}
+
+/// The output for a row: what the command line prints for the same options.
+fn detail(
+    id: &str,
+    sources: &[Source],
+    options: &Options,
+    now_ms: i64,
+    probe: Option<&Probe>,
+    style: Style,
+) -> String {
+    let period = period_label(options.since, now_ms);
+    let dir = options.instructions.as_deref().map(Path::new);
+    let chosen: Vec<&Source> = sources
+        .iter()
+        .filter(|s| options.tool == Tool::All || s.tool == tool_name(options.tool))
+        .filter(|s| id.strip_prefix("data:").is_none_or(|tool| tool == s.tool))
+        .collect();
+    let analyses: Vec<Analysis> = chosen
+        .iter()
+        .map(|s| {
+            let probe = probe.cloned().filter(|_| s.tool == "claude");
+            analyse_all(s, options, now_ms, probe, dir, &period)
         })
         .collect();
+    let reports: Vec<_> = chosen
+        .iter()
+        .zip(&analyses)
+        .map(|(source, a)| crate::report(source, a, &period, None))
+        .collect();
+    if options.ai_report {
+        return format!("{}\n", render::ai_report_json(&reports));
+    }
+    let blocks: Vec<String> = reports.iter().map(|r| render::text(r, style)).collect();
     blocks.join("\n")
 }
 
@@ -295,9 +286,10 @@ pub fn run(mut sources: Vec<Source>, now_ms: i64) -> ExitCode {
     let console = Console::stderr(ColorMode::Auto);
     let choices = source_choices(&sources);
     let (mut choice, mut period) = (0usize, Period::Days7);
-    // The probe runs once when chosen; its answer then goes into every analysis.
+    // Tool calls are read the first time a report asks for them, the probe runs once; both
+    // then serve every later report.
+    let mut with_tools = false;
     let mut probe: Option<Probe> = None;
-    let mut show: Option<String> = None;
     let style = Style::new(
         std::env::var_os("NO_COLOR").is_none_or(|v| v.is_empty()),
         render::terminal_columns(),
@@ -305,54 +297,55 @@ pub fn run(mut sources: Vec<Source>, now_ms: i64) -> ExitCode {
 
     loop {
         let wanted = choices[choice];
-        let options = Options {
-            summary: true,
-            sessions: true,
-            projects: true,
-            findings: true,
-            since: period.since(),
-            tool: wanted,
-            ..Options::default()
-        };
         let chosen = |s: &Source| wanted == Tool::All || s.tool == tool_name(wanted);
-        let analyses: Vec<Analysis> = sources
-            .iter_mut()
-            .filter(|s| chosen(s))
-            .map(|s| {
-                let probe = probe.clone().filter(|_| s.tool == "claude");
-                analyse(s, &options, now_ms, probe)
-            })
-            .collect();
-        let views: Vec<View> = sources
-            .iter()
-            .filter(|s| chosen(s))
-            .zip(&analyses)
-            .map(|(source, analysis)| View { source, analysis })
-            .collect();
-        let period_words = period_label(period.since(), now_ms);
-        let labels: Vec<&str> = views.iter().map(|v| v.source.label).collect();
-        let menu = to_menu(
-            &model(&views),
-            format!("{} · {period_words}", labels.join(" · ")),
-        );
-
-        if let Some(id) = show.take() {
-            print!("{}", detail(&id, &views, &period_words, style));
-            eprint!("\nPress Enter to return to the menu. ");
-            let _ = io::stderr().flush();
-            let mut line = String::new();
-            let _ = io::stdin().lock().read_line(&mut line);
-        }
-        match menu.run(console, SelectMode::Always, true) {
-            Ok(Outcome::Selected(id)) if id == "probe" => {
-                if let Some(claude) = sources.iter().find(|s| s.tool == "claude") {
-                    let since_ms = period.since().map(|s| s.start_ms(now_ms));
-                    probe = Some(run_probe(claude, since_ms, true, None));
-                }
-                show = Some("rule:baseline-load".to_owned());
-            }
+        let outcome = {
+            // What the rows say about the period: totals and findings, no message content.
+            let options = Options {
+                summary: true,
+                findings: true,
+                since: period.since(),
+                tool: wanted,
+                ..Options::default()
+            };
+            let analyses: Vec<Analysis> = sources
+                .iter()
+                .filter(|s| chosen(s))
+                .map(|s| analyse(s, &options, now_ms, None))
+                .collect();
+            let views: Vec<View> = sources
+                .iter()
+                .filter(|s| chosen(s))
+                .zip(&analyses)
+                .map(|(source, analysis)| View { source, analysis })
+                .collect();
+            let labels: Vec<&str> = views.iter().map(|v| v.source.label).collect();
+            let note = format!(
+                "{} · {}",
+                labels.join(" · "),
+                period_label(period.since(), now_ms)
+            );
+            to_menu(&model(&views, period), note).run(console, SelectMode::Always, true)
+        };
+        match outcome {
             Ok(Outcome::Selected(id)) => {
-                print!("{}", detail(&id, &views, &period_words, style));
+                let options = row_options(&id, wanted, period);
+                if (options.tool_calls || options.skills) && !with_tools {
+                    eprintln!("Reading tool calls …");
+                    sources = read_sources_with(Tool::All, true);
+                    with_tools = true;
+                }
+                if options.report == Some(Bundle::Start)
+                    && probe.is_none()
+                    && let Some(claude) = sources.iter().find(|s| chosen(s) && s.tool == "claude")
+                {
+                    let since_ms = options.since.map(|s| s.start_ms(now_ms));
+                    let dir = options.instructions.as_deref().map(Path::new);
+                    probe = Some(run_probe(claude, since_ms, true, dir));
+                }
+                let probe = probe
+                    .as_ref()
+                    .filter(|_| options.report == Some(Bundle::Start));
+                print!("{}", detail(&id, &sources, &options, now_ms, probe, style));
                 eprint!("\nPress Enter to return to the menu. ");
                 let _ = io::stderr().flush();
                 let mut line = String::new();
@@ -402,8 +395,6 @@ mod tests {
     fn analysed(mut sources: Vec<Source>) -> (Vec<Source>, Vec<Analysis>) {
         let options = Options {
             summary: true,
-            sessions: true,
-            projects: true,
             findings: true,
             ..Options::default()
         };
@@ -423,27 +414,35 @@ mod tests {
     }
 
     #[test]
-    fn model_has_overview_one_row_per_rule_a_probe_row_and_a_data_row_per_source() {
+    fn model_has_one_row_per_report_and_a_data_row_per_source() {
         let (sources, analyses) = analysed(vec![source("claude", "Claude Code", "epoch-current")]);
-        let model = model(&views(&sources, &analyses));
+        let model = model(&views(&sources, &analyses), Period::Days30);
         let titles: Vec<_> = model.iter().map(|s| s.title).collect();
-        assert_eq!(titles, ["OVERVIEW", "FINDINGS", "DATA"]);
-        assert_eq!(model[0].rows[0].id, "summary");
+        assert_eq!(titles, ["REPORTS", "DATA"]);
+        let ids: Vec<_> = model[0].rows.iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            [
+                "report:overview",
+                "report:changes",
+                "report:waste",
+                "report:start",
+                "report:ai"
+            ]
+        );
         assert!(model[0].rows[0].description.starts_with("4 requests"));
-        let ids: Vec<_> = model[1].rows.iter().map(|r| r.id.as_str()).collect();
-        assert_eq!(ids.len(), 6);
-        assert!(ids.contains(&"rule:cache-rebuild"));
-        // Claude Code can be asked for /context; the row says it runs claude.
-        assert_eq!(ids.last(), Some(&"probe"));
-        assert!(model[1].rows[5].description.contains("runs claude"));
-        let thrash = model[1]
-            .rows
-            .iter()
-            .find(|r| r.label == "compact-thrash")
-            .unwrap();
-        assert!(thrash.description == "none" || thrash.description == "n/a");
-        assert_eq!(model[2].rows.len(), 1);
-        assert_eq!(model[2].rows[0].id, "data:claude");
+        assert!(model[0].rows[0].description.ends_with("findings"));
+        assert_eq!(
+            model[0].rows[1].description,
+            "last 30 days next to the 30 before"
+        );
+        // A row that opens message content or starts claude says so before it is chosen.
+        for row in &model[0].rows[2..] {
+            assert!(row.description.contains("reads tool calls"), "{}", row.id);
+        }
+        assert!(model[0].rows[3].description.contains("runs claude"));
+        assert_eq!(model[1].rows.len(), 1);
+        assert_eq!(model[1].rows[0].id, "data:claude");
     }
 
     #[test]
@@ -452,40 +451,71 @@ mod tests {
             source("claude", "Claude Code", "epoch-current"),
             source("codex", "Codex CLI", "codex-basic"),
         ]);
-        let model = model(&views(&sources, &analyses));
+        let model = model(&views(&sources, &analyses), Period::Days7);
         assert_eq!(model[0].rows[0].description, "claude 4 · codex 2 requests");
-        let rebuild = model[1]
-            .rows
-            .iter()
-            .find(|r| r.label == "cache-rebuild")
-            .unwrap();
-        assert!(rebuild.description.contains("codex n/a"));
-        assert_eq!(model[2].rows.len(), 2);
+        assert_eq!(model[1].rows.len(), 2);
+    }
+
+    #[test]
+    fn codex_alone_is_not_told_that_claude_runs() {
+        let (sources, analyses) = analysed(vec![source("codex", "Codex CLI", "codex-basic")]);
+        let model = model(&views(&sources, &analyses), Period::Days7);
+        assert!(!model[0].rows[3].description.contains("runs claude"));
     }
 
     #[test]
     fn source_without_usage_says_so_instead_of_looking_healthy() {
         let (sources, analyses) =
             analysed(vec![source("codex", "Codex CLI", "codex-no-token-count")]);
-        let model = model(&views(&sources, &analyses));
-        assert_eq!(model[2].rows[0].description, "no analysable data");
+        let model = model(&views(&sources, &analyses), Period::Days7);
+        assert_eq!(model[1].rows[0].description, "no analysable data");
         assert_eq!(model[0].rows[0].description, "no requests in the period");
     }
 
     #[test]
-    fn detail_prints_only_the_chosen_part() {
-        let (sources, analyses) = analysed(vec![
+    fn a_row_stands_for_the_options_of_its_report() {
+        let waste = row_options("report:waste", Tool::Claude, Period::Days30);
+        assert!(waste.tool_calls && waste.compaction_causes && waste.subagents);
+        assert_eq!(waste.since, Some(Since::Days(30)));
+        assert_eq!(waste.tool, Tool::Claude);
+        // The comparison sets both periods itself, from the menu's period.
+        let changes = row_options("report:changes", Tool::All, Period::Days30);
+        assert_eq!((changes.since, changes.compare), (None, Some(30)));
+        let all = row_options("report:changes", Tool::All, Period::All);
+        assert_eq!(all.compare, Some(7));
+        // The overview and a data row never open message content.
+        for id in ["report:overview", "report:changes", "data:claude"] {
+            let options = row_options(id, Tool::All, Period::Days7);
+            assert!(!options.tool_calls && !options.skills, "{id}");
+        }
+        let data = row_options("data:claude", Tool::All, Period::Days7);
+        assert!(!data.summary && !data.findings);
+    }
+
+    #[test]
+    fn detail_prints_what_the_report_holds() {
+        let sources = vec![
             source("claude", "Claude Code", "epoch-current"),
             source("codex", "Codex CLI", "codex-basic"),
-        ]);
-        let v = views(&sources, &analyses);
+        ];
         let style = Style::new(false, None);
-        let summary = detail("summary", &v, "all logs", style);
-        assert!(summary.contains("SUMMARY") && !summary.contains("FINDINGS"));
-        let data = detail("data:codex", &v, "all logs", style);
+        let show = |id: &str| {
+            let options = row_options(id, Tool::All, Period::All);
+            detail(id, &sources, &options, 0, None, style)
+        };
+        let overview = show("report:overview");
+        assert!(overview.contains("SUMMARY") && overview.contains("FINDINGS"));
+        assert!(overview.contains("Claude Code") && overview.contains("Codex CLI"));
+        let data = show("data:codex");
         assert!(data.contains("Codex CLI") && !data.contains("Claude Code"));
         assert!(!data.contains("SUMMARY"));
-        assert!(detail("rule:big-context", &v, "all logs", style).contains("FINDINGS"));
+        // The AI report is one line of JSON, as on the command line.
+        let ai = show("report:ai");
+        assert!(ai.starts_with('{') && ai.ends_with("}\n"));
+        // The source the menu is set to limits every report.
+        let options = row_options("report:overview", Tool::Codex, Period::All);
+        let codex = detail("report:overview", &sources, &options, 0, None, style);
+        assert!(!codex.contains("Claude Code"));
     }
 
     #[test]

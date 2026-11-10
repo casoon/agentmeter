@@ -42,8 +42,104 @@ const CHECKS: &str = "data-quality";
 const CAPTURE_NAME: &str =
     "a capture name has letters, digits, - _ . only, up to 64, and does not start with a dot";
 
+/// A report: several analyses under one question, so the single flags need not be known.
+/// The menu offers the same ones.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum Bundle {
+    Overview,
+    Changes,
+    Waste,
+    Start,
+    Ai,
+}
+
+impl Bundle {
+    pub const ALL: [Bundle; 5] = [
+        Bundle::Overview,
+        Bundle::Changes,
+        Bundle::Waste,
+        Bundle::Start,
+        Bundle::Ai,
+    ];
+
+    /// The value `--report` takes.
+    pub fn name(self) -> &'static str {
+        match self {
+            Bundle::Overview => "overview",
+            Bundle::Changes => "changes",
+            Bundle::Waste => "waste",
+            Bundle::Start => "start",
+            Bundle::Ai => "ai",
+        }
+    }
+
+    /// The question it answers, as the menu words it.
+    pub fn title(self) -> &'static str {
+        match self {
+            Bundle::Overview => "Overview",
+            Bundle::Changes => "What changed?",
+            Bundle::Waste => "Where is waste?",
+            Bundle::Start => "What loads at start?",
+            Bundle::Ai => "Report for an AI",
+        }
+    }
+
+    /// What it shows and, where it opens message content or other files, that it does.
+    pub fn about(self) -> &'static str {
+        match self {
+            Bundle::Overview => "totals, findings, projects",
+            Bundle::Changes => "the last days next to the days before",
+            Bundle::Waste => "repeated tool calls, compactions, sub-agents · reads tool calls",
+            Bundle::Start => "instruction files here, skills · reads tool calls",
+            Bundle::Ai => "findings as compact JSON · reads tool calls",
+        }
+    }
+
+    /// Whether the report opens message content for tool calls or skill names.
+    pub fn reads_tool_calls(self) -> bool {
+        matches!(self, Bundle::Waste | Bundle::Start | Bundle::Ai)
+    }
+
+    /// Switches on the analyses of this report; what the line already set stays.
+    pub fn apply(self, options: &mut Options) {
+        match self {
+            Bundle::Overview => {
+                options.summary = true;
+                options.findings = true;
+                options.projects = true;
+            }
+            Bundle::Changes => {
+                options.compare.get_or_insert(BUNDLE_COMPARE_DAYS);
+            }
+            Bundle::Waste => {
+                options.tool_calls = true;
+                options.compaction_causes = true;
+                options.subagents = true;
+            }
+            Bundle::Start => {
+                options.skills = true;
+                options.instructions.get_or_insert_with(|| ".".to_owned());
+            }
+            Bundle::Ai => {
+                options.ai_report = true;
+                options.findings = true;
+                options.tool_calls = true;
+                options.skills = true;
+            }
+        }
+    }
+}
+
+/// Days `--report changes` compares unless `--compare` says otherwise.
+const BUNDLE_COMPARE_DAYS: i64 = 7;
+
+/// Values `--report` accepts, for the error message.
+const REPORTS: &str = "overview, changes, waste, start or ai";
+
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Options {
+    /// The report asked for with `--report`; its analyses are switched on in the fields below.
+    pub report: Option<Bundle>,
     pub check: Option<Check>,
     pub tool: Tool,
     pub summary: bool,
@@ -128,6 +224,16 @@ where
         match arg.as_str() {
             "-h" | "--help" => return Invocation::Help,
             "-V" | "--version" => return Invocation::Version,
+            "--report" => {
+                let value = args.next();
+                match Bundle::ALL
+                    .into_iter()
+                    .find(|b| Some(b.name()) == value.as_deref())
+                {
+                    Some(bundle) => options.report = Some(bundle),
+                    None => return Invocation::Error(format!("--report needs {REPORTS}")),
+                }
+            }
             "--summary" => options.summary = true,
             "--sessions" => options.sessions = true,
             "--projects" => options.projects = true,
@@ -260,6 +366,9 @@ where
             _ => return Invocation::Error(format!("unknown option `{arg}`")),
         }
     }
+    if let Some(bundle) = options.report {
+        bundle.apply(&mut options);
+    }
     if options.probe && options.tool == Tool::Codex {
         return Invocation::Error(
             "--probe asks Claude Code; it does not apply to codex".to_owned(),
@@ -314,7 +423,19 @@ pub fn help(version: &str) -> String {
 Usage:
   agentmeter [options]
 
-Without options on a terminal agentmeter opens a menu; anywhere else it prints the summary.
+Without options on a terminal agentmeter opens a menu of the reports below; anywhere else it
+prints the summary.
+
+Reports (several analyses under one question; the single options follow):
+      --report overview  Totals, findings and projects (--summary --findings --projects)
+      --report changes   The last 7 days next to the 7 before (--compare 7d; another period
+                         with --compare <Nd>)
+      --report waste     Repeated tool calls, compactions, sub-agents (--tool-calls
+                         --compaction-causes --subagents). Reads tool calls.
+      --report start     Instruction files of this directory and skills (--instructions .
+                         --skills). Reads tool calls and instruction files.
+      --report ai        The findings as compact JSON for an AI (--ai-report --tool-calls
+                         --skills). Reads tool calls.
 
 Reads the Claude Code (~/.claude, or CLAUDE_CONFIG_DIR) and Codex CLI (~/.codex, or
 CODEX_HOME) session logs and reports totals and findings with next steps.
@@ -628,6 +749,38 @@ mod tests {
         ] {
             assert!(matches!(run(bad), Invocation::Error(_)), "{bad:?}");
         }
+    }
+
+    #[test]
+    fn a_report_switches_on_its_analyses_and_keeps_what_the_line_set() {
+        let Invocation::Run(options) = run(&["--report", "waste"]) else {
+            panic!("expected a run");
+        };
+        assert!(options.tool_calls && options.compaction_causes && options.subagents);
+        assert!(!options.summary && !options.skills);
+        let Invocation::Run(options) = run(&["--compare", "30d", "--report", "changes"]) else {
+            panic!("expected a run");
+        };
+        assert_eq!(options.compare, Some(30));
+        let Invocation::Run(options) = run(&["--report", "start", "--instructions", "/x"]) else {
+            panic!("expected a run");
+        };
+        assert!(options.skills);
+        assert_eq!(options.instructions.as_deref(), Some("/x"));
+        let Invocation::Run(options) = run(&["--report", "ai"]) else {
+            panic!("expected a run");
+        };
+        assert!(options.ai_report && options.findings && options.tool_calls && options.skills);
+        let Invocation::Error(message) = run(&["--report", "everything"]) else {
+            panic!("expected an error");
+        };
+        assert!(message.contains("overview"));
+        assert!(matches!(run(&["--report"]), Invocation::Error(_)));
+        // A report that sets both periods itself refuses --since like --compare does.
+        assert!(matches!(
+            run(&["--report", "changes", "--since", "7d"]),
+            Invocation::Error(_)
+        ));
     }
 
     #[test]

@@ -7,8 +7,13 @@ behaviour.
 
 ## [Unreleased]
 
+### Added
+
+- **CLI:** `--report overview|changes|waste|start|ai` answers one question with several analyses at once, so the single options need not be known; `--help` lists the reports first. Details: [Usage](https://github.com/casoon/agentmeter#usage).
+
 ### Changed
 
+- **CLI:** the menu offers these five reports instead of one row per view and rule. A row that reads tool calls or starts `claude` says so before it is chosen; the overview and the comparison still read usage metadata only.
 - **Pages:** the overview and the home page describe the released state and the analyses added in 0.2.0, and the privacy text names what `--tool-calls` and `--skills` read.
 
 ## [0.2.0] - 2026-11-10

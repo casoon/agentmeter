@@ -2195,3 +2195,27 @@ fn ai_report_is_opt_in_and_leaves_the_json_contract_alone() {
     }
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[test]
+fn a_report_prints_what_its_single_options_print() {
+    let report = run("epoch-current", &["--report", "overview"]);
+    let flags = run("epoch-current", &["--summary", "--findings", "--projects"]);
+    assert!(report.status.success());
+    assert!(!report.stdout.is_empty());
+    assert_eq!(report.stdout, flags.stdout);
+    let waste = run("epoch-current", &["--report", "waste", "--json"]);
+    let single = run(
+        "epoch-current",
+        &[
+            "--tool-calls",
+            "--compaction-causes",
+            "--subagents",
+            "--json",
+        ],
+    );
+    assert_eq!(waste.stdout, single.stdout);
+    assert_eq!(
+        run("epoch-current", &["--report", "all"]).status.code(),
+        Some(2)
+    );
+}
