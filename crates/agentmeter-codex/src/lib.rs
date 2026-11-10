@@ -114,15 +114,34 @@ pub fn read(homes: &[PathBuf]) -> Dataset {
 /// the output. Codex logs the arguments of its current tools as free-form scripts, so no file or
 /// command is read from them and no call is judged failed or successful.
 pub fn read_with_tools(homes: &[PathBuf], tools: bool) -> (Dataset, ToolData) {
+    read_with_progress(homes, tools, &mut |_, _| {})
+}
+
+/// Like [`read_with_tools`]; `progress` is called with the files read so far and the number of
+/// files in all, once before the first file and once after each.
+pub fn read_with_progress(
+    homes: &[PathBuf],
+    tools: bool,
+    progress: &mut dyn FnMut(u64, u64),
+) -> (Dataset, ToolData) {
     let mut reader = Reader {
         collect_tools: tools,
         ..Reader::default()
     };
-    for home in homes {
-        let mut files = Vec::new();
-        for name in ROLLOUT_DIRS {
-            collect_files(&home.join(name), &mut files);
-        }
+    let per_home: Vec<(&PathBuf, Vec<PathBuf>)> = homes
+        .iter()
+        .map(|home| {
+            let mut files = Vec::new();
+            for name in ROLLOUT_DIRS {
+                collect_files(&home.join(name), &mut files);
+            }
+            (home, files)
+        })
+        .collect();
+    let total = per_home.iter().map(|(_, files)| files.len() as u64).sum();
+    let mut done = 0;
+    progress(done, total);
+    for (home, files) in per_home {
         // A rollout that exists in plain text and compressed is read once: the plain one wins.
         let plain: HashSet<OsString> = files
             .iter()
@@ -135,6 +154,8 @@ pub fn read_with_tools(homes: &[PathBuf], tools: bool) -> (Dataset, ToolData) {
             } else {
                 reader.read_file(home, &file);
             }
+            done += 1;
+            progress(done, total);
         }
     }
     let tool_data = reader.tool_data();

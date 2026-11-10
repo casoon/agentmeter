@@ -88,16 +88,37 @@ pub fn read(config_dirs: &[PathBuf]) -> Dataset {
 /// Like [`read`]; with `tools` also the tool calls (`--tool-calls`), for which message content
 /// is opened. Without it content stays unread, as in the default mode.
 pub fn read_with_tools(config_dirs: &[PathBuf], tools: bool) -> (Dataset, ToolData) {
+    read_with_progress(config_dirs, tools, &mut |_, _| {})
+}
+
+/// Like [`read_with_tools`]; `progress` is called with the files read so far and the number of
+/// files in all, once before the first file and once after each.
+pub fn read_with_progress(
+    config_dirs: &[PathBuf],
+    tools: bool,
+    progress: &mut dyn FnMut(u64, u64),
+) -> (Dataset, ToolData) {
     let mut reader = Reader {
         collect_tools: tools,
         ..Reader::default()
     };
-    for dir in config_dirs {
-        let projects = dir.join("projects");
-        let mut files = Vec::new();
-        collect_files(&projects, &mut files);
+    let per_dir: Vec<(PathBuf, Vec<PathBuf>)> = config_dirs
+        .iter()
+        .map(|dir| {
+            let projects = dir.join("projects");
+            let mut files = Vec::new();
+            collect_files(&projects, &mut files);
+            (projects, files)
+        })
+        .collect();
+    let total = per_dir.iter().map(|(_, files)| files.len() as u64).sum();
+    let mut done = 0;
+    progress(done, total);
+    for (projects, files) in &per_dir {
         for file in files {
-            reader.read_file(&projects, &file);
+            reader.read_file(projects, file);
+            done += 1;
+            progress(done, total);
         }
     }
     let tool_data = reader.tool_data();

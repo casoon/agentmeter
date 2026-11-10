@@ -330,7 +330,6 @@ pub fn run(mut sources: Vec<Source>, now_ms: i64) -> ExitCode {
             Ok(Outcome::Selected(id)) => {
                 let options = row_options(&id, wanted, period);
                 if (options.tool_calls || options.skills) && !with_tools {
-                    eprintln!("Reading tool calls …");
                     sources = read_sources_with(Tool::All, true);
                     with_tools = true;
                 }

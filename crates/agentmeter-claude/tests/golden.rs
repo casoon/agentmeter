@@ -207,3 +207,13 @@ fn logged_run_time_of_agents_is_read_and_linked_only_as_far_as_content_is_opened
     assert_eq!(opened.agent_runs_unlinked, 0);
     let _ = fs::remove_dir_all(dir);
 }
+
+#[test]
+fn progress_counts_every_file_up_to_the_total() {
+    let mut calls = Vec::new();
+    let dirs = [fixture("epoch-current")];
+    agentmeter_claude::read_with_progress(&dirs, false, &mut |done, total| {
+        calls.push((done, total));
+    });
+    assert_eq!(calls, [(0, 2), (1, 2), (2, 2)]);
+}
