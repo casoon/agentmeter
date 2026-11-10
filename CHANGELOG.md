@@ -7,6 +7,8 @@ behaviour.
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-11-10
+
 ### Changed
 
 - **CLI:** reading the logs shows a progress bar on stderr per source once it takes longer than a second, so the menu and the reports no longer wait on an empty screen with large logs. Nothing is shown when stderr is not a terminal.
