@@ -376,18 +376,7 @@ fn run(options: &Options, interactive: bool) -> ExitCode {
             }
             let probe = (options.probe && s.tool == "claude")
                 .then(|| run_probe(s, since_ms, io::stderr().is_terminal(), instructions_dir));
-            let mut analysis = analyse(s, options, now_ms, probe);
-            if options.skills {
-                analysis.skills = Some(analyse_skills(s, since_ms, analysis.probe.as_ref()));
-            }
-            if let Some(dir) = instructions_dir {
-                analysis.instructions =
-                    Some(scan_instructions(s.tool, dir, analysis.probe.as_ref()));
-            }
-            if options.ai_report {
-                analysis.ai_report = Some(ai_report(s, &analysis, options, &period));
-            }
-            analysis
+            analyse_all(s, options, now_ms, probe, instructions_dir, &period)
         })
         .collect();
     if let Some(name) = &options.project
@@ -406,29 +395,7 @@ fn run(options: &Options, interactive: bool) -> ExitCode {
     let reports: Vec<Report> = sources
         .iter()
         .zip(&analyses)
-        .map(|(source, a)| Report {
-            tool: source.tool,
-            label: source.label,
-            period: period.clone(),
-            project: options.project.as_deref(),
-            places: &source.places,
-            quality: &a.quality,
-            summary: a.summary.as_ref(),
-            sessions: a.sessions.as_deref(),
-            projects: a.projects.as_deref(),
-            findings: a.findings.as_ref(),
-            probe: a.probe.as_ref(),
-            instructions: a.instructions.as_ref(),
-            tool_calls: a.tool_calls.as_ref(),
-            transitions: a.transitions.as_ref(),
-            compare: a.compare.as_ref(),
-            subagents: a.subagents.as_ref(),
-            skills: a.skills.as_ref(),
-            compaction_causes: a.compaction_causes.as_ref(),
-            before_after: a.before_after.as_ref(),
-            retention: a.retention.as_ref(),
-            ai_report: a.ai_report.as_ref(),
-        })
+        .map(|(source, a)| report(source, a, &period, options.project.as_deref()))
         .collect();
     if options.ai_report && !options.json {
         println!("{}", render::ai_report_json(&reports));
@@ -442,6 +409,61 @@ fn run(options: &Options, interactive: bool) -> ExitCode {
         print!("{}", blocks.join("\n"));
     }
     ExitCode::SUCCESS
+}
+
+/// Every analysis the options ask for, including the ones that read more than the logs.
+pub fn analyse_all(
+    source: &Source,
+    options: &Options,
+    now_ms: i64,
+    probe: Option<Probe>,
+    instructions_dir: Option<&Path>,
+    period: &str,
+) -> Analysis {
+    let since_ms = options.since.map(|s| s.start_ms(now_ms));
+    let mut analysis = analyse(source, options, now_ms, probe);
+    if options.skills {
+        analysis.skills = Some(analyse_skills(source, since_ms, analysis.probe.as_ref()));
+    }
+    if let Some(dir) = instructions_dir {
+        analysis.instructions = Some(scan_instructions(source.tool, dir, analysis.probe.as_ref()));
+    }
+    if options.ai_report {
+        analysis.ai_report = Some(ai_report(source, &analysis, options, period));
+    }
+    analysis
+}
+
+/// What the output prints for one source: everything its analysis holds.
+pub fn report<'a>(
+    source: &'a Source,
+    a: &'a Analysis,
+    period: &str,
+    project: Option<&'a str>,
+) -> Report<'a> {
+    Report {
+        tool: source.tool,
+        label: source.label,
+        period: period.to_owned(),
+        project,
+        places: &source.places,
+        quality: &a.quality,
+        summary: a.summary.as_ref(),
+        sessions: a.sessions.as_deref(),
+        projects: a.projects.as_deref(),
+        findings: a.findings.as_ref(),
+        probe: a.probe.as_ref(),
+        instructions: a.instructions.as_ref(),
+        tool_calls: a.tool_calls.as_ref(),
+        transitions: a.transitions.as_ref(),
+        compare: a.compare.as_ref(),
+        subagents: a.subagents.as_ref(),
+        skills: a.skills.as_ref(),
+        compaction_causes: a.compaction_causes.as_ref(),
+        before_after: a.before_after.as_ref(),
+        retention: a.retention.as_ref(),
+        ai_report: a.ai_report.as_ref(),
+    }
 }
 
 /// The AI report of one source, from the analyses the run made.

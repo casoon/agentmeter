@@ -34,24 +34,27 @@ gh attestation verify agentmeter-<version>-<target>.tar.gz --repo casoon/agentme
 The binaries are built with `cargo auditable`, so `cargo audit bin agentmeter` can check a
 downloaded one for known vulnerabilities.
 
-Run `agentmeter` in a terminal: it opens a menu with the summary,
-sessions, projects, one row per rule and the data quality per source. `S` switches the source,
-`P` the period, `/` searches.
+Run `agentmeter` in a terminal: it opens a menu of reports, each a question answered by
+several analyses at once, plus the data quality per source. `S` switches the source, `P` the
+period, `/` searches.
 
 ```
 agentmeter  Claude Code · Codex CLI · last 7 days
 
-OVERVIEW
-› Summary         claude 30,955 · codex 2,959 requests
-  Sessions        claude 136 · codex 46
-FINDINGS
-  baseline-load   claude observed · codex observed
-  cache-rebuild   claude observed · codex n/a
-  compact-thrash  claude none · codex n/a
+REPORTS
+› Overview              claude 30,955 · codex 2,959 requests
+  What changed?         last 7 days next to the 7 before
+  Where is waste?       repeated tool calls, compactions, sub-agents · reads tool calls
+  What loads at start?  instruction files here, skills · reads tool calls, runs claude for /context
+  Report for an AI      findings as compact JSON · reads tool calls
+DATA
+  Data · Claude Code    30,955 requests · 2 notes
   …
 ```
 
-(Shortened, figures from one author's logs. `none`: checked, nothing to report. `n/a`: the source cannot support the rule.)
+(Shortened, figures from one author's logs.) The first two reports read usage metadata only. A
+row that reads tool calls or starts `claude` says so; choosing it is the consent, and nothing of
+that kind happens before. The same reports are on the command line as `--report <name>`.
 
 ## What it does
 
@@ -103,6 +106,11 @@ FINDINGS   ? 3 to look at   ✓ 1 fine   ✓ 1 nothing found
 
 ```sh
 agentmeter                     # on a terminal: menu; otherwise the summary of every source with logs
+agentmeter --report overview   # totals, findings and projects in one
+agentmeter --report changes    # the last 7 days next to the 7 before (--compare 7d)
+agentmeter --report waste      # repeated tool calls, compactions, sub-agents; reads tool calls
+agentmeter --report start      # instruction files of this directory and skills; reads tool calls
+agentmeter --report ai         # the findings as compact JSON for an AI; reads tool calls
 agentmeter --summary           # totals, days and compactions
 agentmeter --sessions          # sessions by input
 agentmeter --projects          # projects by input
@@ -132,6 +140,10 @@ It reads `~/.claude/projects` (or `$CLAUDE_CONFIG_DIR`) and `~/.codex/sessions` 
 support, for example cache rebuilds without cache-write data, are reported as "not measurable". Colour is used only on a terminal and
 not when `NO_COLOR` is set.
 
+A report only switches on the single options named in `agentmeter --help`; they combine with
+each other and with `--since`, `--tool`, `--project` and `--json` (`--report changes` sets its
+own periods, like `--compare`). `--report start` adds the probe only together with `--probe`.
+
 ## Asking Claude Code: `--probe`
 
 The logs show how large the first request of a session is, not what it is made of. `--probe` asks
@@ -143,7 +155,7 @@ because they are not sent at the start.
 
 `/context` is answered locally: no model request, no cost, no session file. Starting `claude`
 does load the configuration of each directory, including its MCP servers and hooks, which is why
-the probe only runs when asked for (`--probe`, or *Context probe* in the menu). It measures
+the probe only runs when asked for (`--probe`, or *What loads at start?* in the menu). It measures
 today's configuration, not the one the period ran with, and it measures the command-line
 `claude`: the report names the front end that wrote the sessions, since a desktop app or IDE adds
 instructions and tools of its own.

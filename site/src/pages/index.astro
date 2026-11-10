@@ -36,7 +36,9 @@ const heroFindings = findingsLines
   .slice(0, findingsLines.findIndex((line) => line.includes("today's configuration, /context")))
   .join('\n')
   .trimEnd();
-const usage = `agentmeter                      # menu on a terminal
+const usage = `agentmeter                      # menu of reports on a terminal
+agentmeter --report overview    # totals, findings and projects in one
+agentmeter --report waste       # repeats, compactions, sub-agents; reads tool calls
 agentmeter --findings           # rules with measure, evidence and next step
 agentmeter --tool codex --since 7d
 agentmeter --compare 7d         # the last 7 days next to the 7 before
