@@ -194,9 +194,17 @@ parent is listed apart and added to no session. The parts add up to the requests
 summary, and the input "with agents" is derived, never added again.
 
 It also lists pairs of streams that were active at once, told apart as delegation, agents of one
-session, or time only (two independent chats). The logs hold no run time, so a run is a stretch of
-requests less than an hour apart, its length still contains waiting, and a run of one request has
-no observed length. With `--tool-calls` it adds files that several agents read or wrote, during
+session, or time only (two independent chats). A run is a stretch of requests less than an hour
+apart, its length still contains waiting, and a run of one request has no observed length.
+
+Claude Code logs how long a finished run of an agent took, and the report shows it per agent and
+added up per session: wall time from start to end of each run, waiting included, so a sum over
+agents that ran at once is not elapsed time. The log gives it with the result of an agent that ran
+in the foreground; for a background agent it stands in the notice of its end, which names the agent
+only in its text, so those are assigned with `--tool-calls` and counted as unassigned without it.
+An agent without a recorded run stays unknown, as does every Codex agent.
+
+With `--tool-calls` it adds files that several agents read or wrote, during
 the overlap too, with other line ranges as counter-example (Codex logs no file targets, so there it
 says so). An overlap or a shared file is a reason to look, not a conflict, and nothing here
 promises time saved by running agents in parallel or calls delegation inefficient.

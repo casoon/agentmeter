@@ -166,3 +166,44 @@ fn project_is_the_directory_with_subagents_and_worktrees_folded_in() {
         d.requests
     );
 }
+
+#[test]
+fn logged_run_time_of_agents_is_read_and_linked_only_as_far_as_content_is_opened() {
+    let dir = std::env::temp_dir().join(format!("agentmeter-claude-runs-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    let project = dir.join("projects/demo");
+    fs::create_dir_all(&project).unwrap();
+    // A foreground agent's result, the notice of a background agent (twice: a resumed session
+    // copies it), a tool result that is no agent's, and a notice of another kind.
+    let notice = r#"{"type":"attachment","timestamp":"2026-10-28T12:10:00.000Z","sessionId":"s1","attachment":{"type":"queued_command","commandMode":"task-notification","prompt":"<task-notification>\n<task-id>b2</task-id>\n<result>x</result>","usage":{"durationMs":90000,"totalTokens":5,"toolUses":3}}}"#;
+    let lines = [
+        r#"{"type":"user","timestamp":"2026-10-28T12:05:00.000Z","sessionId":"s1","parentUuid":null,"message":{"role":"user","content":"x"},"toolUseResult":{"agentId":"a1","status":"completed","prompt":"x","totalDurationMs":60000,"totalTokens":5,"totalToolUseCount":2}}"#,
+        notice,
+        notice,
+        r#"{"type":"user","timestamp":"2026-10-28T12:06:00.000Z","sessionId":"s1","message":{"role":"user","content":"x"},"toolUseResult":"x"}"#,
+        r#"{"type":"attachment","timestamp":"2026-10-28T12:11:00.000Z","sessionId":"s1","attachment":{"type":"queued_command","commandMode":"prompt","prompt":"x"}}"#,
+    ];
+    fs::write(project.join("s1.jsonl"), lines.join("\n") + "\n").unwrap();
+
+    let plain = read(std::slice::from_ref(&dir));
+    let runs = |d: &Dataset| -> Vec<(String, u64)> {
+        d.agent_runs
+            .iter()
+            .map(|r| (r.agent.clone(), r.duration_ms))
+            .collect()
+    };
+    assert_eq!(runs(&plain), [("agent-a1".to_owned(), 60000)]);
+    assert_eq!(plain.agent_runs_unlinked, 1, "the notice text stays unread");
+    assert_eq!(plain.stats.skipped_lines, 0);
+
+    let (opened, _) = agentmeter_claude::read_with_tools(std::slice::from_ref(&dir), true);
+    assert_eq!(
+        runs(&opened),
+        [
+            ("agent-a1".to_owned(), 60000),
+            ("agent-b2".to_owned(), 90000)
+        ]
+    );
+    assert_eq!(opened.agent_runs_unlinked, 0);
+    let _ = fs::remove_dir_all(dir);
+}

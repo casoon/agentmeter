@@ -13,10 +13,15 @@ mod raw;
 pub mod settings;
 pub mod skills;
 
-use agentmeter_core::model::{AgentLink, Compaction, Dataset, ReadStats, Request, SessionStart};
+use agentmeter_core::model::{
+    AgentLink, AgentRun, Compaction, Dataset, ReadStats, Request, SessionStart,
+};
 use agentmeter_core::time::parse_iso_ms;
 use agentmeter_core::toolcalls::{ToolData, ToolEvent, ToolKind, ToolStats, ToolStatus};
-use raw::{RawBlock, RawCompact, RawLine, RawMessage, RawToolMessage, ToolContent};
+use raw::{
+    RawAgentResult, RawAttachment, RawBlock, RawCompact, RawLine, RawMessage, RawRunUsage,
+    RawToolMessage, ToolContent,
+};
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
 use std::fs::{self, File};
@@ -139,6 +144,8 @@ struct Reader {
     files: Vec<String>,
     session_starts: Vec<SessionStart>,
     agent_links: Vec<AgentLink>,
+    /// Finished agent runs by (agent, end, duration): a resumed session copies the records.
+    agent_runs: HashSet<(Option<String>, i64, u64)>,
     source: usize,
     /// `--tool-calls`: open message content for tool calls and results.
     collect_tools: bool,
@@ -247,7 +254,13 @@ impl Reader {
                     }
                     self.assistant(&line, session, project, source, sub, &mut facts);
                 }
-                Some("user") if self.collect_tools => self.tool_results(&line),
+                Some("user") => {
+                    self.agent_result(&line);
+                    if self.collect_tools {
+                        self.tool_results(&line);
+                    }
+                }
+                Some("attachment") => self.run_notice(&line),
                 Some("system") => self.system(&line, session, project, source),
                 Some(kind) if KNOWN_TYPES.contains(&kind) => {}
                 Some(kind) => *self.stats.unknown_types.entry(kind.to_owned()).or_default() += 1,
@@ -446,6 +459,65 @@ impl Reader {
         }
     }
 
+    /// The result of an agent that ran in the foreground: its id and the figures of the run.
+    fn agent_result(&mut self, line: &RawLine) {
+        let Some(raw) = line
+            .tool_use_result
+            .filter(|r| r.get().contains("\"totalDurationMs\""))
+        else {
+            return;
+        };
+        let Ok(RawAgentResult {
+            agent_id: Some(id),
+            total_duration_ms: Some(duration_ms),
+        }) = serde_json::from_str::<RawAgentResult>(raw.get())
+        else {
+            return;
+        };
+        let Some(end_ms) = line.timestamp.as_deref().and_then(parse_iso_ms) else {
+            return;
+        };
+        self.agent_runs
+            .insert((Some(agent_name(&id)), end_ms, duration_ms));
+    }
+
+    /// The notice that a background agent finished. Its figures are structured; the agent's id
+    /// stands only in the notice text, which is searched for it when tool calls are read and
+    /// otherwise left unopened.
+    fn run_notice(&mut self, line: &RawLine) {
+        let Some(raw) = line.attachment else {
+            return;
+        };
+        let Ok(a) = serde_json::from_str::<RawAttachment>(raw.get()) else {
+            return;
+        };
+        if a.kind.as_deref() != Some("queued_command")
+            || a.command_mode.as_deref() != Some("task-notification")
+        {
+            return;
+        }
+        let Some(RawRunUsage {
+            duration_ms: Some(duration_ms),
+        }) = a.usage
+        else {
+            return;
+        };
+        let Some(end_ms) = line
+            .timestamp
+            .as_deref()
+            .or(a.timestamp.as_deref())
+            .and_then(parse_iso_ms)
+        else {
+            return;
+        };
+        let agent = a
+            .prompt
+            .filter(|_| self.collect_tools)
+            .and_then(|p| task_id(p.get()))
+            .map(agent_name);
+        self.agent_runs.insert((agent, end_ms, duration_ms));
+    }
+
     /// `tool_result` blocks of a user line: status and size only.
     fn tool_results(&mut self, line: &RawLine) {
         let Some(raw) = line.message else {
@@ -573,15 +645,51 @@ impl Reader {
         self.stats.cache_write_measured = !requests.is_empty();
         self.stats.requests_without_model =
             requests.iter().filter(|r| r.model.is_empty()).count() as u64;
+        let mut agent_runs = Vec::new();
+        let mut agent_runs_unlinked = 0;
+        for (agent, end_ms, duration_ms) in self.agent_runs {
+            match agent {
+                Some(agent) => agent_runs.push(AgentRun {
+                    agent,
+                    end_ms,
+                    duration_ms,
+                }),
+                None => agent_runs_unlinked += 1,
+            }
+        }
+        agent_runs.sort_by(|a, b| (a.end_ms, &a.agent).cmp(&(b.end_ms, &b.agent)));
         Dataset {
             requests,
             compactions,
             files: self.files,
             session_starts: self.session_starts,
             agent_links: self.agent_links,
+            agent_runs,
+            agent_runs_unlinked,
             stats: self.stats,
         }
     }
+}
+
+/// The name of an agent's log file for the id the log gives in a result or notice.
+fn agent_name(id: &str) -> String {
+    if id.starts_with("agent-") {
+        id.to_owned()
+    } else {
+        format!("agent-{id}")
+    }
+}
+
+/// The id between `<task-id>` and `</task-id>` in a notice; nothing else of the text is kept.
+fn task_id(text: &str) -> Option<&str> {
+    let (_, rest) = text.split_once("<task-id>")?;
+    let (id, _) = rest.split_once("</task-id>")?;
+    (!id.is_empty()
+        && id.len() <= 64
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'))
+    .then_some(id)
 }
 
 /// Display name of a project directory such as `-Users-me-GitHub-demo-app`. The encoded path is
