@@ -9,7 +9,7 @@ behaviour.
 
 ### Changed
 
-- **Pages:** the project site uses the current shared theme (0.12.8).
+- **Pages:** the project site uses the current shared theme (0.12.10).
 
 
 ## [0.3.1] - 2026-11-10
