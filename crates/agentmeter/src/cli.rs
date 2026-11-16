@@ -149,6 +149,8 @@ pub struct Options {
     pub since: Option<Since>,
     pub project: Option<String>,
     pub json: bool,
+    /// Print a request for `renderreport render` instead of text; implies summary, projects and findings.
+    pub renderreport: bool,
     /// Ask Claude Code (`claude -p /context`) what a session start holds; implies findings.
     pub probe: bool,
     /// Scan the instruction files that apply to this directory; implies nothing else.
@@ -239,6 +241,12 @@ where
             "--projects" => options.projects = true,
             "--findings" => options.findings = true,
             "--json" => options.json = true,
+            "--renderreport" => {
+                options.renderreport = true;
+                options.summary = true;
+                options.projects = true;
+                options.findings = true;
+            }
             "--tool-calls" => options.tool_calls = true,
             "--transitions" => options.transitions = true,
             "--compare" => match args.next() {
@@ -532,6 +540,9 @@ Options:
       --ai-report-max <n>
                          Findings the AI report keeps, 1 to 20 (default 3).
       --json             Print JSON instead of text (schema: docs/reference/json.md)
+      --renderreport     Print a request for `renderreport render` instead of text, to make a
+                         PDF: agentmeter --renderreport | renderreport render - -o usage.pdf
+                         (implies --summary, --projects and --findings)
       --check <name>     data-quality: exit 1 if a source has unreadable data or none to
                          analyse, 0 otherwise, 2 for a bad call. Findings never fail it.
   -h, --help             Show this help

@@ -7,6 +7,10 @@ behaviour.
 
 ## [Unreleased]
 
+### Added
+
+- **CLI:** `--renderreport` prints the summary, projects and findings as a request for [renderreport](https://github.com/casoon/renderreport) instead of text, so `agentmeter --renderreport | renderreport render - -o usage.pdf` makes a PDF. agentmeter itself gets no new dependency.
+
 ### Changed
 
 - **Pages:** the project site uses the current shared theme (0.12.14).

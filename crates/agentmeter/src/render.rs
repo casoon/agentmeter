@@ -2233,6 +2233,147 @@ pub fn json(reports: &[Report]) -> String {
         .expect("serialisable")
 }
 
+/// `--renderreport`: the sections of `--json` as a request for `renderreport render`, which makes
+/// a PDF of it. Built from the JSON value, so it carries what `--json` carries and nothing else.
+pub fn renderreport_request(reports: &[Report]) -> String {
+    let mut components: Vec<Value> = Vec::new();
+    for report in reports {
+        let source = json_source(report);
+        let tool = if report.tool == "codex" {
+            "Codex CLI"
+        } else {
+            "Claude Code"
+        };
+        components.push(json!({ "type": "section", "data": {
+            "title": tool, "subtitle": report.period, "level": 1 } }));
+        if let Some(summary) = source.get("summary") {
+            components.extend(request_summary(summary));
+        }
+        if let Some(projects) = source.get("projects").and_then(Value::as_array) {
+            components.push(request_projects(projects));
+        }
+        if let Some(findings) = source.get("findings").and_then(Value::as_array) {
+            components.extend(request_findings(findings, &source["rules"]));
+        }
+        components.push(request_quality(&source["data_quality"]));
+    }
+    let periods: Vec<&str> = reports.iter().map(|r| r.period.as_str()).collect();
+    let tools: Vec<&str> = reports.iter().map(|r| r.tool).collect();
+    serde_json::to_string_pretty(&json!({
+        "template_id": "default",
+        "title": "Coding-agent usage report",
+        "subtitle": format!("{} · {}", periods.first().copied().unwrap_or(""), tools.join(", ")),
+        "metadata": { "author": "agentmeter", "lang": "en" },
+        "components": components,
+    }))
+    .expect("serialisable")
+}
+
+fn request_summary(summary: &Value) -> Vec<Value> {
+    let n = |key: &str| summary[key].as_u64().unwrap_or(0);
+    let compactions = &summary["compactions"];
+    let mut out = vec![
+        json!({ "type": "metric-strip", "data": { "items": [
+            { "label": "Requests", "value": count(n("requests")) },
+            { "label": "Sessions", "value": count(n("sessions")) },
+            { "label": "Input", "value": tokens(n("input")), "unit": "tokens" },
+            { "label": "Cache read", "value": format!("{:.0}", summary["cache_read_pct"].as_f64().unwrap_or(0.0)), "unit": "%" },
+        ] } }),
+        json!({ "type": "key-value-list", "data": { "items": [
+            { "key": "Output", "value": format!("{} tokens, {} compactions (auto {}, manual {})",
+                tokens(n("output")), compactions["total"], compactions["auto"], compactions["manual"]) },
+        ] } }),
+    ];
+    let days: Vec<Value> = summary["days"]
+        .as_array()
+        .map(|days| {
+            days.iter()
+                .map(|d| json!({ "label": d["date"], "value": (d["input"].as_u64().unwrap_or(0) as f64 / 1e6).round() }))
+                .collect()
+        })
+        .unwrap_or_default();
+    if days.len() > 1 {
+        out.push(json!({ "type": "chart", "data": {
+            "title": "Input per day (M tokens)", "chart_type": "bar",
+            "series": [{ "name": "Input", "data": days }] } }));
+    }
+    out
+}
+
+fn request_projects(projects: &[Value]) -> Value {
+    let rows: Vec<Value> = projects
+        .iter()
+        .map(|p| {
+            json!([
+                p["project"],
+                count(p["sessions"].as_u64().unwrap_or(0)),
+                count(p["requests"].as_u64().unwrap_or(0)),
+                format!("{:.0} %", p["input_share_pct"].as_f64().unwrap_or(0.0)),
+                format!("{:.0} %", p["cache_read_pct"].as_f64().unwrap_or(0.0)),
+            ])
+        })
+        .collect();
+    json!({ "type": "audit-table", "data": {
+        "title": "Projects by input",
+        "columns": [
+            { "header": "Project" },
+            { "header": "Sessions", "align": "right" },
+            { "header": "Requests", "align": "right" },
+            { "header": "Input share", "align": "right" },
+            { "header": "Cache read", "align": "right" } ],
+        "rows": rows } })
+}
+
+/// A finding is a `lever` (medium), a `look` (low) or `fine` (info), as its conclusion says.
+fn request_findings(findings: &[Value], rules: &Value) -> Vec<Value> {
+    let mut out = vec![json!({ "type": "section", "data": { "title": "Findings", "level": 2 } })];
+    for f in findings {
+        let severity = match f["conclusion"]["kind"].as_str() {
+            Some("lever") => "medium",
+            Some("look") => "low",
+            _ => "info",
+        };
+        out.push(json!({ "type": "finding", "data": {
+            "title": format!("{}: {}", f["rule"].as_str().unwrap_or(""), f["message"].as_str().unwrap_or("")),
+            "severity": severity,
+            "description": f["conclusion"]["text"],
+            "recommendation": f["next_step"] }}));
+    }
+    let none: Vec<Value> = rules
+        .as_array()
+        .map(|rules| {
+            rules
+                .iter()
+                .filter(|r| r["status"] != "observed")
+                .map(|r| {
+                    let why = match r["status"].as_str() {
+                        Some("not_measurable") => {
+                            format!("not measurable: {}", r["reason"].as_str().unwrap_or(""))
+                        }
+                        _ => "nothing found".to_owned(),
+                    };
+                    json!({ "content": format!("{}: {why}", r["rule"].as_str().unwrap_or("")) })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    if !none.is_empty() {
+        out.push(json!({ "type": "list", "data": { "title": "Rules without a finding", "items": none } }));
+    }
+    out
+}
+
+fn request_quality(q: &Value) -> Value {
+    let n = |key: &str| q[key].as_u64().unwrap_or(0);
+    json!({ "type": "key-value-list", "data": { "title": "Data quality", "items": [
+        { "key": "Observed", "value": format!("{} to {}, {} requests in all",
+            q["observed_from"].as_str().map_or("", |t| &t[..t.len().min(10)]),
+            q["observed_to"].as_str().map_or("", |t| &t[..t.len().min(10)]),
+            count(n("requests"))) },
+        { "key": "Read", "value": format!("{} files, {} lines, {} skipped", count(n("files")), count(n("lines")), count(n("skipped_lines"))) },
+    ] } })
+}
+
 /// `--ai-report` alone: only the compact reports, one per source, in one line of JSON.
 pub fn ai_report_json(reports: &[Report]) -> String {
     let sources: Vec<Value> = reports
