@@ -440,6 +440,8 @@ fn run(options: &Options, interactive: bool) -> ExitCode {
         .collect();
     if options.ai_report && !options.json {
         println!("{}", render::ai_report_json(&reports));
+    } else if options.renderreport {
+        println!("{}", render::renderreport_request(&reports));
     } else if options.json {
         println!("{}", render::json(&reports));
     } else {

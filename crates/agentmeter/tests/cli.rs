@@ -2219,3 +2219,20 @@ fn a_report_prints_what_its_single_options_print() {
         Some(2)
     );
 }
+
+#[test]
+fn renderreport_prints_a_request_with_the_sections_of_json() {
+    let output = run("epoch-current", &["--renderreport"]);
+    assert!(output.status.success());
+    let v: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(v["template_id"], "default");
+    let types: Vec<&str> = v["components"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["type"].as_str().unwrap())
+        .collect();
+    for wanted in ["section", "metric-strip", "audit-table", "key-value-list"] {
+        assert!(types.contains(&wanted), "{wanted} in {types:?}");
+    }
+}

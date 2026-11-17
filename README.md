@@ -132,6 +132,7 @@ agentmeter --tool codex        # claude, codex or all (default)
 agentmeter --since 7d          # 7d, 30d or a date such as 2026-10-01
 agentmeter --project <name>    # one project
 agentmeter --json              # the same data as JSON, one entry per source (docs/reference/json.md)
+agentmeter --renderreport | renderreport render - -o usage.pdf  # the report as a PDF (needs renderreport)
 agentmeter --check data-quality # exit 1 if a source has unreadable data or none to analyse
 ```
 
