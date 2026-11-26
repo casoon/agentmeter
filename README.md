@@ -380,6 +380,10 @@ cargo test --workspace
 Fixtures are synthetic, one per log-format epoch. A test against your own logs runs only with
 `AGENTMETER_REAL_LOGS=1`.
 
+## Author
+
+Built and maintained by [Jörn Seidel](https://www.casoon.de/joern-seidel/) ([CASOON](https://www.casoon.de/)). The project is discussed in an article on Insights (in German): [Claude Code: Auto-Compact, Sub-Agents und Memory als feste Arbeitsregel](https://insights.casoon.de/artikel/claude-code-kontext-einstellungen-memory-delegation/).
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
